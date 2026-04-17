@@ -1,0 +1,125 @@
+<template>
+  <div class="stats-bar">
+    <div class="segmented">
+      <button class="tab-btn" :class="{ active: currentFilter === 'pending' }" @click="setFilter('pending')">
+        待办 <span class="tab-count">{{ pendingCount }}</span>
+      </button>
+      <button class="tab-btn" :class="{ active: currentFilter === 'in_progress' }" @click="setFilter('in_progress')">
+        进行中 <span class="tab-count">{{ inProgressCount }}</span>
+      </button>
+      <button class="tab-btn" :class="{ active: currentFilter === 'done' }" @click="setFilter('done')">
+        已完成 <span class="tab-count">{{ doneCount }}</span>
+      </button>
+      <button class="tab-btn" :class="{ active: currentFilter === 'all' }" @click="setFilter('all')">
+        全部 <span class="tab-count">{{ totalCount }}</span>
+      </button>
+    </div>
+
+    <button type="button" class="add-btn" title="新建任务" @click="emit('add')">+</button>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue';
+import { useTaskStore } from '../stores/taskStore';
+import type { TaskFilter } from '../stores/taskStore';
+
+const taskStore = useTaskStore();
+
+const currentFilter = computed(() => taskStore.filter);
+const totalCount = computed(() => taskStore.totalTaskCount);
+const pendingCount = computed(() => taskStore.pendingTaskCount);
+const inProgressCount = computed(() => taskStore.inProgressTaskCount);
+const doneCount = computed(() => taskStore.completedTaskCount);
+
+function setFilter(filter: TaskFilter) {
+  taskStore.setFilter(filter);
+}
+
+const emit = defineEmits<{
+  (event: 'add'): void;
+}>();
+</script>
+
+<style scoped>
+.stats-bar {
+  padding: 1px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.segmented {
+  flex: 1;
+  height: 28px;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: 10px;
+  background: var(--seg-bg);
+  border: 0.5px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.tab-btn {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tab-btn:hover {
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+}
+
+.tab-btn.active {
+  color: var(--text-primary);
+  font-weight: 500;
+  background: var(--seg-active-bg);
+  box-shadow: var(--seg-active-shadow);
+}
+
+.tab-count {
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+}
+
+.add-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 0.5px solid color-mix(in srgb, var(--border) 65%, transparent);
+  background: var(--bg-solid);
+  color: var(--primary);
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 400;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.add-btn:hover {
+  color: color-mix(in srgb, var(--primary) 88%, #000);
+  background: color-mix(in srgb, var(--primary) 10%, var(--bg-solid));
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  box-shadow: 0 1px 4px rgba(0, 122, 255, 0.14);
+}
+</style>

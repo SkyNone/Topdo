@@ -1,0 +1,18 @@
+Topdo 安装说明（请先看）
+
+1) 安装
+- 将 Topdo.app 拖拽到 Applications（应用程序）文件夹
+
+2) 若提示“无法打开”或“已损坏”，请打开“终端”执行：
+
+  xattr -cr /Applications/Topdo.app
+
+3) 再次打开应用
+
+可选兜底（仅当第 2 步后仍打不开）：
+
+  codesign --force --deep --sign - /Applications/Topdo.app
+  open /Applications/Topdo.app
+
+说明：
+- 这是未公证版本在部分 macOS 上的常见安全拦截，不代表安装包损坏。

@@ -1,0 +1,195 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* 主色 - macOS 系统蓝 */
+  --primary: #007aff;
+  --primary-hover: #0066d6;
+  --primary-active: #004ea2;
+  --primary-light: #f0f7ff;
+
+  /* 背景层级 */
+  --bg-primary: rgba(255, 255, 255, 0.82);
+  --bg-solid: #ffffff;
+  --bg-secondary: #f5f5f7;
+  --bg-tertiary: #e8e8ed;
+  --bg-hover: #f5f5f7;
+
+  /* 文字层级 */
+  --text-primary: #1d1d1f;
+  --text-secondary: #86868b;
+  --text-tertiary: #aeaeb2;
+  --text-placeholder: #c7c7cc;
+
+  /* 状态色 */
+  --status-pending: #ff9500;
+  --status-in-progress: #007aff;
+  --status-done: #34c759;
+
+  /* 优先级色 */
+  --priority-high: #ff3b30;
+  --priority-medium: #007aff;
+  --priority-low: transparent;
+
+  /* 边框和阴影 */
+  --border: #e5e5ea;
+  --border-light: #f2f2f7;
+  --shadow-sm: 0 0.5px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-focus: 0 0 0 3px rgba(0, 122, 255, 0.15);
+  --seg-bg: #f0f0f0;
+  --seg-active-bg: #ffffff;
+  --seg-active-shadow: 0 0.5px 1.5px rgba(0, 0, 0, 0.06);
+
+  /* 圆角 */
+  --radius-window: 10px;
+  --radius-card: 8px;
+  --radius-btn: 6px;
+  --radius-tag: 4px;
+
+  /* 红绿灯 */
+  --traffic-close: #ff5f57;
+  --traffic-minimize: #ffbd2e;
+  --traffic-maximize: #28c840;
+  --traffic-inactive: #dcdcdc;
+
+  /* 字体 */
+  --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  --font-size-xs: 10px;
+  --font-size-sm: 11px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+
+  color-scheme: light;
+}
+
+html[data-theme='dark'] {
+  --primary: #0a84ff;
+  --primary-hover: #409cff;
+  --primary-active: #0066cc;
+  --primary-light: rgba(10, 132, 255, 0.2);
+
+  --bg-primary: rgba(28, 28, 30, 0.86);
+  --bg-solid: #1c1c1e;
+  --bg-secondary: #2c2c2e;
+  --bg-tertiary: #3a3a3c;
+  --bg-hover: #2f2f31;
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1a6;
+  --text-tertiary: #8e8e93;
+  --text-placeholder: #636366;
+
+  --status-pending: #ff9f0a;
+  --status-in-progress: #0a84ff;
+  --status-done: #30d158;
+
+  --priority-high: #ff453a;
+  --priority-medium: #0a84ff;
+  --priority-low: transparent;
+
+  --border: #3a3a3c;
+  --border-light: #2c2c2e;
+  --shadow-sm: 0 0.5px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4);
+  --shadow-focus: 0 0 0 3px rgba(10, 132, 255, 0.25);
+  --seg-bg: #2a2a2c;
+  --seg-active-bg: #3a3a3c;
+  --seg-active-shadow: 0 0.5px 1.5px rgba(0, 0, 0, 0.28);
+
+  --traffic-inactive: #5f5f63;
+  color-scheme: dark;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+html,
+body,
+#app,
+.app-container {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+html {
+  background: transparent !important;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: transparent !important;
+  padding: 0;
+  user-select: none;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  padding: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.task-list {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.task-list:hover {
+  scrollbar-width: thin;
+}
+
+.task-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.task-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.task-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+  transition: background 0.3s ease;
+}
+
+.task-list:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.task-list:hover::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.expand-enter-active,
+.expand-leave-active {
+  transition: all 0.2s ease;
+}
+
+.expand-enter-from,
+.expand-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}

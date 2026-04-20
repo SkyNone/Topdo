@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::{
   fs,
   path::{Path, PathBuf},
+  str::FromStr,
   sync::Mutex,
 };
 use tauri::{
@@ -19,6 +20,7 @@ use tauri::{
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
   AppHandle, LogicalSize, Manager, Size, State, WebviewWindow,
 };
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const NORMAL_WIDTH: f64 = 320.0;
@@ -30,6 +32,7 @@ const DB_FILE_NAME: &str = "tasks.db";
 const TASK_ORDER_FILE_NAME: &str = "task_order.json";
 const WINDOW_SIZE_FILE_NAME: &str = "window_size.json";
 const TOKEN_SALT: &str = "topdo-salt-2026";
+const DEFAULT_TOGGLE_SHORTCUT: &str = "Cmd+Shift+T";
 
 const CREATE_TASKS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS tasks (
@@ -90,11 +93,19 @@ struct FeishuConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
+struct ShortcutConfig {
+  #[serde(default)]
+  toggle_window: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 struct AppConfig {
   #[serde(default)]
   mode: String,
   #[serde(default)]
   feishu: FeishuConfig,
+  #[serde(default)]
+  shortcut: ShortcutConfig,
   #[serde(default = "default_sync_interval")]
   sync_interval: i64,
   #[serde(default)]
@@ -129,6 +140,12 @@ struct ConfigPayload {
 
 #[derive(Debug, Default)]
 struct ConfigIoLock;
+
+#[derive(Debug, Default)]
+struct GlobalShortcutState {
+  current: Option<tauri_plugin_global_shortcut::Shortcut>,
+  current_text: String,
+}
 
 #[derive(Debug, Default)]
 struct TokenManager {
@@ -203,6 +220,18 @@ struct UpdateTaskResult {
 struct CreateTaskResult {
   record_id: String,
   synced: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ShortcutConfigPayload {
+  toggle_window: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SetShortcutConfigResult {
+  success: bool,
+  message: String,
+  applied: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -585,6 +614,9 @@ fn normalize_loaded_config(mut cfg: AppConfig) -> AppConfig {
   if cfg.created_at.trim().is_empty() {
     cfg.created_at = now_iso();
   }
+  if cfg.shortcut.toggle_window.trim().is_empty() {
+    cfg.shortcut.toggle_window = DEFAULT_TOGGLE_SHORTCUT.to_string();
+  }
   cfg
 }
 
@@ -592,6 +624,9 @@ fn default_app_config() -> AppConfig {
   AppConfig {
     mode: String::new(),
     feishu: FeishuConfig::default(),
+    shortcut: ShortcutConfig {
+      toggle_window: DEFAULT_TOGGLE_SHORTCUT.to_string(),
+    },
     sync_interval: 30,
     created_at: now_iso(),
     app_mode: String::new(),
@@ -627,6 +662,9 @@ fn load_app_config_from_file(app: &AppHandle) -> Result<AppConfig, String> {
           table_id: legacy.table_id,
           folder_token: String::new(),
           collaborator_email: String::new(),
+        },
+        shortcut: ShortcutConfig {
+          toggle_window: DEFAULT_TOGGLE_SHORTCUT.to_string(),
         },
         sync_interval: default_sync_interval_seconds(legacy.sync_interval_seconds),
         created_at: now_iso(),
@@ -1765,24 +1803,154 @@ fn init_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
+fn shortcut_conflict_label(shortcut: &tauri_plugin_global_shortcut::Shortcut) -> Option<&'static str> {
+  const RESERVED: [(&str, &str); 9] = [
+    ("Cmd+N", "新建任务"),
+    ("Cmd+,", "打开设置"),
+    ("Cmd+K", "快捷键面板"),
+    ("Cmd+1", "筛选：待办"),
+    ("Cmd+2", "筛选：进行中"),
+    ("Cmd+3", "筛选：已完成"),
+    ("Cmd+4", "筛选：全部"),
+    ("Cmd+Shift+R", "飞书手动同步"),
+    ("Cmd+Shift+L", "主题切换"),
+  ];
+
+  for (value, label) in RESERVED {
+    if let Ok(reserved) = tauri_plugin_global_shortcut::Shortcut::from_str(value) {
+      if reserved.id() == shortcut.id() {
+        return Some(label);
+      }
+    }
+  }
+  None
+}
+
+fn format_shortcut(shortcut: &tauri_plugin_global_shortcut::Shortcut) -> String {
+  let mut parts: Vec<String> = Vec::new();
+  if shortcut.mods.contains(tauri_plugin_global_shortcut::Modifiers::SUPER) {
+    parts.push("Cmd".to_string());
+  }
+  if shortcut.mods.contains(tauri_plugin_global_shortcut::Modifiers::CONTROL) {
+    parts.push("Ctrl".to_string());
+  }
+  if shortcut.mods.contains(tauri_plugin_global_shortcut::Modifiers::ALT) {
+    parts.push("Alt".to_string());
+  }
+  if shortcut.mods.contains(tauri_plugin_global_shortcut::Modifiers::SHIFT) {
+    parts.push("Shift".to_string());
+  }
+
+  let key_part = shortcut
+    .key
+    .to_string()
+    .strip_prefix("Key")
+    .map_or_else(|| shortcut.key.to_string(), |v| v.to_string());
+  parts.push(key_part);
+  parts.join("+")
+}
+
+fn parse_shortcut_input(
+  raw: &str,
+) -> Result<(tauri_plugin_global_shortcut::Shortcut, String), String> {
+  let normalized = raw
+    .trim()
+    .replace('⌘', "Cmd")
+    .replace('⌥', "Alt")
+    .replace('⌃', "Ctrl")
+    .replace('⇧', "Shift");
+  if normalized.is_empty() {
+    return Err("快捷键不能为空".to_string());
+  }
+
+  let shortcut = tauri_plugin_global_shortcut::Shortcut::from_str(&normalized)
+    .map_err(|_| "快捷键格式无效。示例：Cmd+Shift+T".to_string())?;
+  if shortcut.mods.is_empty() {
+    return Err("快捷键必须包含至少一个修饰键（Cmd/Alt/Ctrl/Shift）".to_string());
+  }
+  if let Some(label) = shortcut_conflict_label(&shortcut) {
+    return Err(format!("快捷键冲突：该组合已用于“{}”", label));
+  }
+
+  Ok((shortcut.clone(), format_shortcut(&shortcut)))
+}
+
+fn register_toggle_shortcut(
+  app: &AppHandle,
+  shortcut: tauri_plugin_global_shortcut::Shortcut,
+  label: String,
+) -> Result<(), String> {
+  let manager = app.global_shortcut();
+  let state = app.state::<Mutex<GlobalShortcutState>>();
+
+  let old = {
+    let guard = state
+      .lock()
+      .map_err(|_| "failed to lock shortcut state".to_string())?;
+    guard.current.clone()
+  };
+
+  if let Some(prev) = old.clone() {
+    let _ = manager.unregister(prev);
+  }
+
+  if let Err(err) = manager.register(shortcut.clone()) {
+    if let Some(prev) = old {
+      let _ = manager.register(prev);
+    }
+    return Err(format!("注册快捷键失败：{err}"));
+  }
+
+  let mut guard = state
+    .lock()
+    .map_err(|_| "failed to lock shortcut state".to_string())?;
+  guard.current = Some(shortcut);
+  guard.current_text = label;
+  Ok(())
+}
+
 fn init_global_shortcut(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-  use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+  use tauri_plugin_global_shortcut::ShortcutState;
 
   let app_for_handler = app.clone();
-  let shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyT);
-  let shortcut_for_handler = shortcut.clone();
 
   app.plugin(
     tauri_plugin_global_shortcut::Builder::new()
-      .with_handler(move |_app, current_shortcut, event| {
-        if current_shortcut == &shortcut_for_handler && event.state() == ShortcutState::Pressed {
+      .with_handler(move |_app, _current_shortcut, event| {
+        if event.state() == ShortcutState::Pressed {
           let _ = toggle_window_visibility(&app_for_handler);
         }
       })
       .build(),
   )?;
 
-  app.global_shortcut().register(shortcut)?;
+  let cfg = load_app_config_from_file(app).unwrap_or_else(|_| default_app_config());
+  let raw_shortcut = cfg.shortcut.toggle_window.trim();
+  let shortcut_text = if raw_shortcut.is_empty() {
+    DEFAULT_TOGGLE_SHORTCUT
+  } else {
+    raw_shortcut
+  };
+
+  match parse_shortcut_input(shortcut_text) {
+    Ok((shortcut, label)) => {
+      if let Err(err) = register_toggle_shortcut(app, shortcut, label.clone()) {
+        eprintln!("[Rust] register configured shortcut failed: {}", err);
+        let (fallback_shortcut, fallback_label) =
+          parse_shortcut_input(DEFAULT_TOGGLE_SHORTCUT).expect("default shortcut should be valid");
+        register_toggle_shortcut(app, fallback_shortcut, fallback_label)
+          .map_err(Box::<dyn std::error::Error>::from)?;
+      }
+    }
+    Err(err) => {
+      eprintln!("[Rust] parse configured shortcut failed: {}", err);
+      let (fallback_shortcut, fallback_label) =
+        parse_shortcut_input(DEFAULT_TOGGLE_SHORTCUT).expect("default shortcut should be valid");
+      register_toggle_shortcut(app, fallback_shortcut, fallback_label)
+        .map_err(Box::<dyn std::error::Error>::from)?;
+    }
+  }
+
   Ok(())
 }
 
@@ -1962,6 +2130,74 @@ fn load_config(app: AppHandle) -> Result<ConfigPayload, String> {
     folder_token: cfg.feishu.folder_token,
     collaborator_email: cfg.feishu.collaborator_email,
     has_secret: !cfg.feishu.encrypted_app_secret.trim().is_empty(),
+  })
+}
+
+#[tauri::command]
+fn get_shortcut_config(
+  app: AppHandle,
+  state: State<'_, Mutex<GlobalShortcutState>>,
+) -> Result<ShortcutConfigPayload, String> {
+  let from_runtime = state
+    .lock()
+    .map_err(|_| "failed to lock shortcut state".to_string())?
+    .current_text
+    .trim()
+    .to_string();
+
+  if !from_runtime.is_empty() {
+    return Ok(ShortcutConfigPayload {
+      toggle_window: from_runtime,
+    });
+  }
+
+  let cfg = load_app_config_from_file(&app)?;
+  let raw = cfg.shortcut.toggle_window.trim();
+  let value = if raw.is_empty() {
+    DEFAULT_TOGGLE_SHORTCUT.to_string()
+  } else {
+    raw.to_string()
+  };
+
+  Ok(ShortcutConfigPayload {
+    toggle_window: value,
+  })
+}
+
+#[tauri::command]
+fn set_shortcut_config(
+  app: AppHandle,
+  toggle_window: String,
+) -> Result<SetShortcutConfigResult, String> {
+  let previous = {
+    let state = app.state::<Mutex<GlobalShortcutState>>();
+    let guard = state
+      .lock()
+      .map_err(|_| "failed to lock shortcut state".to_string())?;
+    (guard.current.clone(), guard.current_text.clone())
+  };
+
+  let (shortcut, label) = parse_shortcut_input(&toggle_window)?;
+  register_toggle_shortcut(&app, shortcut, label.clone())?;
+
+  let mut cfg = load_app_config_from_file(&app)?;
+  cfg.shortcut.toggle_window = label.clone();
+  if let Err(err) = save_app_config_to_file(&app, &cfg) {
+    if let Some(prev_shortcut) = previous.0 {
+      let rollback_label = if previous.1.trim().is_empty() {
+        format_shortcut(&prev_shortcut)
+      } else {
+        previous.1
+      };
+      let _ = register_toggle_shortcut(&app, prev_shortcut, rollback_label);
+    }
+    return Err(err);
+  }
+
+  Ok(SetShortcutConfigResult {
+    success: true,
+    message: "快捷键已更新".to_string(),
+    applied: Some(label),
   })
 }
 
@@ -2410,6 +2646,7 @@ pub fn run() {
       always_on_top: true,
     }))
     .manage(Mutex::new(ConfigIoLock))
+    .manage(Mutex::new(GlobalShortcutState::default()))
     .manage(tokio::sync::RwLock::new(TokenManager::default()))
     .manage(tokio::sync::Mutex::new(()))
     .setup(|app| {
@@ -2448,6 +2685,8 @@ pub fn run() {
       hide_window_to_tray,
       save_config,
       load_config,
+      get_shortcut_config,
+      set_shortcut_config,
       get_app_mode,
       set_app_mode,
       save_task_order,

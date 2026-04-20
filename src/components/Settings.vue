@@ -18,6 +18,27 @@
     </div>
 
     <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
+      <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">全局唤起快捷键</h3>
+      <p class="mt-1 text-[11px] text-[color:var(--text-secondary)]">
+        用于显示/隐藏 Topdo 窗口。示例：
+        <code class="rounded bg-[color:var(--bg-secondary)] px-1">Cmd+Shift+T</code>、
+        <code class="rounded bg-[color:var(--bg-secondary)] px-1">Cmd+Alt+T</code>
+      </p>
+      <div class="mt-2 flex items-center gap-2">
+        <input
+          v-model="shortcutDraft"
+          type="text"
+          class="flex-1 rounded-[8px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] px-3 py-2 text-sm text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-tertiary)] focus:border-[color:var(--primary)] focus:ring-2 focus:ring-[color:var(--primary-light)]"
+          placeholder="Cmd+Shift+T"
+        />
+        <button type="button" class="action-btn px-3 py-2" :disabled="busy" @click="onSaveShortcut">保存快捷键</button>
+      </div>
+      <p v-if="appliedShortcut" class="mt-2 text-[11px] text-[color:var(--text-tertiary)]">
+        当前生效：<span class="font-medium text-[color:var(--text-secondary)]">{{ appliedShortcut }}</span>
+      </p>
+    </div>
+
+    <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
       <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">外观</h3>
       <div class="mt-3 space-y-2 text-sm">
         <label class="flex items-start gap-2">
@@ -180,6 +201,16 @@
     >
       {{ statusMessage }}
     </p>
+    <div
+      v-if="statusType === 'error' && statusDetail"
+      class="task-scrollbar mt-2 max-h-36 rounded-[8px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-2"
+    >
+      <div class="mb-2 flex items-center justify-end">
+        <button type="button" class="action-btn px-2 py-1 text-[11px]" @click="onCopyErrorDetail">复制错误详情</button>
+        <span v-if="errorDetailCopied" class="ml-2 text-[11px] text-[color:var(--status-done)]">已复制</span>
+      </div>
+      <pre class="whitespace-pre-wrap break-words font-mono text-[11px] leading-4 text-[color:var(--text-secondary)]">{{ statusDetail }}</pre>
+    </div>
 
     <div class="mt-4 grid grid-cols-3 gap-2">
       <button type="button" class="action-btn" :disabled="busy || selectedMode !== 'feishu'" @click="onTestConnection">
@@ -248,6 +279,16 @@ interface ConnectionResult {
   message: string;
 }
 
+interface ShortcutConfigPayload {
+  toggle_window: string;
+}
+
+interface SetShortcutConfigResult {
+  success: boolean;
+  message: string;
+  applied?: string;
+}
+
 const emit = defineEmits<{
   (event: 'back'): void;
   (event: 'saved', mode: AppMode): void;
@@ -258,10 +299,14 @@ const initialMode = ref<AppMode>('local');
 const busy = ref(false);
 const showLogs = ref(false);
 const statusMessage = ref('');
+const statusDetail = ref('');
 const statusType = ref<StatusType>('success');
 const autostartEnabled = ref(false);
 const initialAutostartEnabled = ref(false);
 const autostartLoading = ref(false);
+const shortcutDraft = ref('');
+const appliedShortcut = ref('');
+const errorDetailCopied = ref(false);
 
 const form = reactive<FormState>({
   bitableUrl: '',
@@ -288,7 +333,45 @@ const resolvedThemeLabel = ref<'浅色' | '深色'>(resolvedTheme.value === 'dar
 
 function setStatus(type: StatusType, message: string) {
   statusType.value = type;
-  statusMessage.value = message;
+  if (type === 'error') {
+    const firstLine = message.split('\n').find((line) => line.trim().length > 0) || message;
+    statusMessage.value = firstLine.length > 140 ? `${firstLine.slice(0, 140)}...` : firstLine;
+    statusDetail.value = message;
+  } else {
+    statusMessage.value = message;
+    statusDetail.value = '';
+  }
+}
+
+async function loadShortcutConfig() {
+  try {
+    const config = await invoke<ShortcutConfigPayload>('get_shortcut_config');
+    shortcutDraft.value = config.toggle_window || 'Cmd+Shift+T';
+    appliedShortcut.value = shortcutDraft.value;
+  } catch (error) {
+    setStatus('error', String(error));
+  }
+}
+
+async function onSaveShortcut() {
+  busy.value = true;
+  try {
+    const result = await invoke<SetShortcutConfigResult>('set_shortcut_config', {
+      toggle_window: shortcutDraft.value,
+      toggleWindow: shortcutDraft.value
+    });
+    if (!result.success) {
+      throw new Error(result.message || '快捷键保存失败');
+    }
+    const applied = result.applied || shortcutDraft.value;
+    shortcutDraft.value = applied;
+    appliedShortcut.value = applied;
+    setStatus('success', `快捷键已更新为 ${applied}`);
+  } catch (error) {
+    setStatus('error', String(error));
+  } finally {
+    busy.value = false;
+  }
 }
 
 function buildSaveConfigParams(): Record<string, unknown> {
@@ -495,8 +578,22 @@ async function onCopyLogs() {
   }
 }
 
+async function onCopyErrorDetail() {
+  if (!statusDetail.value) return;
+  try {
+    await navigator.clipboard.writeText(statusDetail.value);
+    errorDetailCopied.value = true;
+    setTimeout(() => {
+      errorDetailCopied.value = false;
+    }, 1500);
+  } catch (error) {
+    setStatus('error', `复制失败: ${String(error)}`);
+  }
+}
+
 onMounted(() => {
   void loadConfig();
+  void loadShortcutConfig();
   void loadAutostartState();
 });
 

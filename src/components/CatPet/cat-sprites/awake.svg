@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- 尾巴（先画，在身体后面） -->
+  <path d="M88 88 Q100 78 98 64 Q96 56 90 54" stroke="#E0D6CC" stroke-width="5" stroke-linecap="round" fill="none"/>
+  
+  <!-- 身体 -->
+  <ellipse cx="60" cy="88" rx="26" ry="22" fill="#F0E8DF"/>
+  <ellipse cx="60" cy="88" rx="26" ry="22" fill="url(#bodyGrad2)" opacity="0.4"/>
+  <!-- 身体阴影 -->
+  <ellipse cx="60" cy="98" rx="22" ry="8" fill="#D4CBC2" opacity="0.25"/>
+  
+  <!-- 前爪 -->
+  <ellipse cx="44" cy="102" rx="7" ry="4" fill="#F5F0EB"/>
+  <ellipse cx="76" cy="102" rx="7" ry="4" fill="#F5F0EB"/>
+  
+  <!-- 头部 -->
+  <circle cx="60" cy="52" r="24" fill="#F5F0EB"/>
+  
+  <!-- 左耳 -->
+  <path d="M40 36 L42 18 L54 32 Z" fill="#F5F0EB"/>
+  <path d="M43 34 L44 22 L52 32 Z" fill="#FFD4CC" opacity="0.6"/>
+  <!-- 右耳 -->
+  <path d="M66 32 L76 16 L80 34 Z" fill="#F5F0EB"/>
+  <path d="M69 32 L75 20 L78 33 Z" fill="#FFD4CC" opacity="0.6"/>
+  
+  <!-- 眼睛 -->
+  <ellipse cx="50" cy="50" rx="4" ry="4.5" fill="#3A3A3A"/>
+  <ellipse cx="70" cy="50" rx="4" ry="4.5" fill="#3A3A3A"/>
+  <!-- 高光 -->
+  <circle cx="52" cy="48" r="1.5" fill="white"/>
+  <circle cx="72" cy="48" r="1.5" fill="white"/>
+  
+  <!-- 鼻子 -->
+  <ellipse cx="60" cy="57" rx="2" ry="1.5" fill="#FFAAAA"/>
+  
+  <!-- 嘴 -->
+  <path d="M57 59 Q60 62 63 59" stroke="#CCBBAA" stroke-width="1" stroke-linecap="round" fill="none"/>
+  
+  <!-- 腮红 -->
+  <ellipse cx="43" cy="56" rx="4" ry="2.5" fill="#FFCCCC" opacity="0.3"/>
+  <ellipse cx="77" cy="56" rx="4" ry="2.5" fill="#FFCCCC" opacity="0.3"/>
+  
+  <!-- 小鱼 -->
+  <g transform="translate(14, 72) scale(0.8)">
+    <ellipse cx="12" cy="8" rx="8" ry="5" fill="#F5A623"/>
+    <path d="M2 8 L-4 2 L-4 14 Z" fill="#F5A623"/>
+    <circle cx="16" cy="7" r="1.2" fill="#3A3A3A"/>
+    <circle cx="16.5" cy="6.5" r="0.5" fill="white"/>
+  </g>
+  
+  <defs>
+    <radialGradient id="bodyGrad2" cx="0.4" cy="0.3">
+      <stop offset="0%" stop-color="#FFF8F2"/>
+      <stop offset="100%" stop-color="#E8DDD3"/>
+    </radialGradient>
+  </defs>
+</svg>

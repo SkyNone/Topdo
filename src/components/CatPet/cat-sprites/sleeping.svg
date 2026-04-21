@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- 身体（蜷缩椭圆） -->
+  <ellipse cx="60" cy="78" rx="34" ry="22" fill="#F0E8DF"/>
+  <ellipse cx="60" cy="78" rx="34" ry="22" fill="url(#bodyGrad1)" opacity="0.5"/>
+  <!-- 身体阴影 -->
+  <ellipse cx="60" cy="85" rx="30" ry="10" fill="#D4CBC2" opacity="0.3"/>
+  
+  <!-- 头部 -->
+  <circle cx="42" cy="68" r="18" fill="#F5F0EB"/>
+  
+  <!-- 左耳 -->
+  <path d="M28 56 L32 44 L40 54 Z" fill="#F5F0EB"/>
+  <path d="M30 54 L33 46 L38 53 Z" fill="#FFD4CC" opacity="0.6"/>
+  <!-- 右耳 -->
+  <path d="M48 52 L56 42 L58 54 Z" fill="#F5F0EB"/>
+  <path d="M50 52 L55 44 L56 53 Z" fill="#FFD4CC" opacity="0.6"/>
+  
+  <!-- 闭眼（弧线） -->
+  <path d="M34 68 Q37 71 40 68" stroke="#555" stroke-width="1.8" stroke-linecap="round" fill="none"/>
+  <path d="M44 67 Q47 70 50 67" stroke="#555" stroke-width="1.8" stroke-linecap="round" fill="none"/>
+  
+  <!-- 鼻子 -->
+  <ellipse cx="42" cy="72" rx="1.5" ry="1" fill="#FFAAAA"/>
+  
+  <!-- 前爪 -->
+  <ellipse cx="32" cy="82" rx="5" ry="3.5" fill="#F5F0EB"/>
+  
+  <!-- 尾巴 -->
+  <path d="M90 72 Q96 62 92 54" stroke="#E0D6CC" stroke-width="5" stroke-linecap="round" fill="none"/>
+  
+  <!-- zzz -->
+  <text x="72" y="46" font-family="SF Pro, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#9CA3AF" opacity="0.7">z</text>
+  <text x="80" y="38" font-family="SF Pro, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#9CA3AF" opacity="0.5">z</text>
+  <text x="90" y="28" font-family="SF Pro, -apple-system, sans-serif" font-size="16" font-weight="600" fill="#9CA3AF" opacity="0.35">z</text>
+  
+  <defs>
+    <radialGradient id="bodyGrad1" cx="0.4" cy="0.3">
+      <stop offset="0%" stop-color="#FFF8F2"/>
+      <stop offset="100%" stop-color="#E8DDD3"/>
+    </radialGradient>
+  </defs>
+</svg>

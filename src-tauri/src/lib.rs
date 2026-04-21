@@ -16,6 +16,7 @@ use std::{
   sync::Mutex,
 };
 use tauri::{
+  Emitter,
   menu::{Menu, MenuItem},
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
   AppHandle, LogicalSize, Manager, Size, State, WebviewWindow,
@@ -25,14 +26,26 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 const MAIN_WINDOW_LABEL: &str = "main";
 const NORMAL_WIDTH: f64 = 320.0;
 const NORMAL_HEIGHT: f64 = 500.0;
-const MINI_WIDTH: f64 = 96.0;
-const MINI_HEIGHT: f64 = 44.0;
+const MINI_WIDTH: f64 = 80.0;
+const MINI_HEIGHT: f64 = 80.0;
 const CONFIG_FILE_NAME: &str = "config.json";
 const DB_FILE_NAME: &str = "tasks.db";
 const TASK_ORDER_FILE_NAME: &str = "task_order.json";
 const WINDOW_SIZE_FILE_NAME: &str = "window_size.json";
 const TOKEN_SALT: &str = "topdo-salt-2026";
 const DEFAULT_TOGGLE_SHORTCUT: &str = "Cmd+Shift+T";
+const DEFAULT_TOGGLE_MODE_SHORTCUT: &str = "Alt+T";
+
+#[cfg(target_os = "macos")]
+const KCG_NORMAL_WINDOW_LEVEL_KEY: i32 = 4;
+#[cfg(target_os = "macos")]
+const KCG_STATUS_WINDOW_LEVEL_KEY: i32 = 9;
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+  fn CGWindowLevelForKey(key: i32) -> i32;
+}
 
 const CREATE_TASKS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS tasks (
@@ -76,6 +89,12 @@ struct WindowStatePayload {
   always_on_top: bool,
 }
 
+#[derive(Debug, Serialize, Clone)]
+struct WindowModeChangedPayload {
+  mode: String,
+  mini_mode: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 struct FeishuConfig {
   #[serde(default)]
@@ -96,6 +115,46 @@ struct FeishuConfig {
 struct ShortcutConfig {
   #[serde(default)]
   toggle_window: String,
+  #[serde(default)]
+  toggle_mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PetPositionConfig {
+  x: f64,
+  y: f64,
+}
+
+impl Default for PetPositionConfig {
+  fn default() -> Self {
+    Self { x: 0.0, y: 0.0 }
+  }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PetConfig {
+  #[serde(default = "default_pet_enabled")]
+  enabled: bool,
+  #[serde(default = "default_pet_show_badge")]
+  show_badge: bool,
+  #[serde(default = "default_pet_animations")]
+  animations: bool,
+  #[serde(default)]
+  cat_position: PetPositionConfig,
+  #[serde(default = "default_pet_window_mode")]
+  window_mode: String,
+}
+
+impl Default for PetConfig {
+  fn default() -> Self {
+    Self {
+      enabled: default_pet_enabled(),
+      show_badge: default_pet_show_badge(),
+      animations: default_pet_animations(),
+      cat_position: PetPositionConfig::default(),
+      window_mode: default_pet_window_mode(),
+    }
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -106,6 +165,8 @@ struct AppConfig {
   feishu: FeishuConfig,
   #[serde(default)]
   shortcut: ShortcutConfig,
+  #[serde(default)]
+  pet: PetConfig,
   #[serde(default = "default_sync_interval")]
   sync_interval: i64,
   #[serde(default)]
@@ -143,8 +204,10 @@ struct ConfigIoLock;
 
 #[derive(Debug, Default)]
 struct GlobalShortcutState {
-  current: Option<tauri_plugin_global_shortcut::Shortcut>,
-  current_text: String,
+  toggle_window: Option<tauri_plugin_global_shortcut::Shortcut>,
+  toggle_window_text: String,
+  toggle_mode: Option<tauri_plugin_global_shortcut::Shortcut>,
+  toggle_mode_text: String,
 }
 
 #[derive(Debug, Default)]
@@ -228,10 +291,30 @@ struct ShortcutConfigPayload {
 }
 
 #[derive(Debug, Serialize)]
+struct ModeShortcutConfigPayload {
+  toggle_mode: String,
+}
+
+#[derive(Debug, Serialize)]
 struct SetShortcutConfigResult {
   success: bool,
   message: String,
   applied: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PetPositionPayload {
+  x: f64,
+  y: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct PetSettingsPayload {
+  enabled: bool,
+  show_badge: bool,
+  animations: bool,
+  cat_position: PetPositionPayload,
+  window_mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -305,6 +388,22 @@ fn default_sync_interval() -> i64 {
   30
 }
 
+fn default_pet_enabled() -> bool {
+  true
+}
+
+fn default_pet_show_badge() -> bool {
+  true
+}
+
+fn default_pet_animations() -> bool {
+  true
+}
+
+fn default_pet_window_mode() -> String {
+  "panel".to_string()
+}
+
 fn normalize_app_mode(mode: &str) -> String {
   if mode.trim() == "feishu" {
     "feishu".to_string()
@@ -320,6 +419,14 @@ fn default_sync_interval_seconds(value: i64) -> i64 {
     value
   } else {
     30
+  }
+}
+
+fn normalize_window_mode(value: &str) -> String {
+  if value.trim() == "cat" {
+    "cat".to_string()
+  } else {
+    "panel".to_string()
   }
 }
 
@@ -501,7 +608,101 @@ fn apply_mini_mode(window: &WebviewWindow) -> tauri::Result<()> {
   window.set_min_size(Some(mini_size))?;
   window.set_max_size(Some(mini_size))?;
   window.set_size(mini_size)?;
-  window.set_always_on_top(true)?;
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_level_for_key(key: i32) -> i32 {
+  unsafe { CGWindowLevelForKey(key) }
+}
+
+fn is_dev_runtime() -> bool {
+  cfg!(debug_assertions)
+}
+
+fn apply_window_traits_safe(window: &WebviewWindow, pinned: bool, reason: &str) -> Result<(), String> {
+  eprintln!("[Rust] apply_window_traits_safe start: reason={reason}, pinned={pinned}");
+  window
+    .set_always_on_top(pinned)
+    .map_err(|err| format!("set always_on_top failed: {err}"))?;
+  window
+    .set_visible_on_all_workspaces(pinned)
+    .map_err(|err| format!("set visible on all workspaces failed: {err}"))?;
+  eprintln!("[Rust] apply_window_traits_safe done: reason={reason}, pinned={pinned}");
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_window_traits_native(
+  window: &WebviewWindow,
+  pinned: bool,
+  reason: &str,
+) -> Result<(), String> {
+  use cocoa::{
+    appkit::{NSColor, NSWindow, NSWindowCollectionBehavior},
+    base::{id, nil, NO},
+  };
+
+  eprintln!("[Rust] apply_window_traits_native start: reason={reason}, pinned={pinned}");
+
+  let ns_window_ptr = window
+    .ns_window()
+    .map_err(|err| format!("ns_window unavailable: {err}"))?;
+  let ns_window: id = ns_window_ptr as id;
+
+  unsafe {
+    ns_window.setBackgroundColor_(NSColor::clearColor(nil));
+    ns_window.setOpaque_(NO);
+    ns_window.setHasShadow_(NO);
+    let mut behavior = ns_window.collectionBehavior();
+    let tracked_flags =
+      NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary;
+    if pinned {
+      behavior |= tracked_flags;
+    } else {
+      behavior &= !tracked_flags;
+    }
+    ns_window.setCollectionBehavior_(behavior);
+    let level = if pinned {
+      macos_window_level_for_key(KCG_STATUS_WINDOW_LEVEL_KEY) as _
+    } else {
+      macos_window_level_for_key(KCG_NORMAL_WINDOW_LEVEL_KEY) as _
+    };
+    ns_window.setLevel_(level);
+  }
+
+  eprintln!("[Rust] apply_window_traits_native done: reason={reason}, pinned={pinned}");
+  Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_window_traits_native(
+  _window: &WebviewWindow,
+  _pinned: bool,
+  _reason: &str,
+) -> Result<(), String> {
+  Ok(())
+}
+
+fn apply_window_traits(
+  window: &WebviewWindow,
+  pinned: bool,
+  include_native: bool,
+  reason: &str,
+) -> Result<(), String> {
+  eprintln!(
+    "[Rust] apply_window_traits start: reason={reason}, pinned={pinned}, include_native={include_native}"
+  );
+  apply_window_traits_safe(window, pinned, reason)?;
+  if include_native {
+    apply_window_traits_native(window, pinned, reason)?;
+  } else {
+    eprintln!("[Rust] apply_window_traits native deferred: reason={reason}, pinned={pinned}");
+  }
+  eprintln!(
+    "[Rust] apply_window_traits done: reason={reason}, pinned={pinned}, include_native={include_native}"
+  );
   Ok(())
 }
 
@@ -510,9 +711,23 @@ fn toggle_window_visibility(app: &AppHandle) -> tauri::Result<()> {
     if window.is_visible().unwrap_or(false) {
       window.hide()?;
     } else {
+      let (mini_mode, pinned) = if let Ok(state) = app.state::<Mutex<UiState>>().lock() {
+        (state.mini_mode, state.always_on_top)
+      } else {
+        (false, true)
+      };
+      let _ = apply_window_traits(&window, pinned, false, "toggle_window_visibility:pre-show");
       window.unminimize()?;
       window.show()?;
       window.set_focus()?;
+      let _ = apply_window_traits(&window, pinned, true, "toggle_window_visibility:post-show");
+      let _ = app.emit(
+        "window-mode-changed",
+        WindowModeChangedPayload {
+          mode: if mini_mode { "cat" } else { "panel" }.to_string(),
+          mini_mode,
+        },
+      );
     }
   }
   Ok(())
@@ -617,6 +832,10 @@ fn normalize_loaded_config(mut cfg: AppConfig) -> AppConfig {
   if cfg.shortcut.toggle_window.trim().is_empty() {
     cfg.shortcut.toggle_window = DEFAULT_TOGGLE_SHORTCUT.to_string();
   }
+  if cfg.shortcut.toggle_mode.trim().is_empty() {
+    cfg.shortcut.toggle_mode = DEFAULT_TOGGLE_MODE_SHORTCUT.to_string();
+  }
+  cfg.pet.window_mode = normalize_window_mode(&cfg.pet.window_mode);
   cfg
 }
 
@@ -626,7 +845,9 @@ fn default_app_config() -> AppConfig {
     feishu: FeishuConfig::default(),
     shortcut: ShortcutConfig {
       toggle_window: DEFAULT_TOGGLE_SHORTCUT.to_string(),
+      toggle_mode: DEFAULT_TOGGLE_MODE_SHORTCUT.to_string(),
     },
+    pet: PetConfig::default(),
     sync_interval: 30,
     created_at: now_iso(),
     app_mode: String::new(),
@@ -665,7 +886,9 @@ fn load_app_config_from_file(app: &AppHandle) -> Result<AppConfig, String> {
         },
         shortcut: ShortcutConfig {
           toggle_window: DEFAULT_TOGGLE_SHORTCUT.to_string(),
+          toggle_mode: DEFAULT_TOGGLE_MODE_SHORTCUT.to_string(),
         },
+        pet: PetConfig::default(),
         sync_interval: default_sync_interval_seconds(legacy.sync_interval_seconds),
         created_at: now_iso(),
         ..default_app_config()
@@ -1757,26 +1980,17 @@ fn init_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     .on_menu_event(move |_tray, event| match event.id.as_ref() {
       "show" => {
         if let Some(window) = app_for_menu.get_webview_window(MAIN_WINDOW_LABEL) {
-          let _ = apply_normal_mode(&window);
-          let _ = window.set_always_on_top(true);
+          let _ = set_window_mode_internal(&app_for_menu, "panel");
           let _ = window.unminimize();
           let _ = window.show();
           let _ = window.set_focus();
-          if let Ok(mut state) = app_for_menu.state::<Mutex<UiState>>().lock() {
-            state.mini_mode = false;
-            state.always_on_top = true;
-          }
         }
       }
       "mini" => {
         if let Some(window) = app_for_menu.get_webview_window(MAIN_WINDOW_LABEL) {
-          let _ = apply_mini_mode(&window);
+          let _ = set_window_mode_internal(&app_for_menu, "cat");
           let _ = window.unminimize();
           let _ = window.show();
-          if let Ok(mut state) = app_for_menu.state::<Mutex<UiState>>().lock() {
-            state.mini_mode = true;
-            state.always_on_top = true;
-          }
         }
       }
       "quit" => {
@@ -1850,9 +2064,7 @@ fn format_shortcut(shortcut: &tauri_plugin_global_shortcut::Shortcut) -> String 
   parts.join("+")
 }
 
-fn parse_shortcut_input(
-  raw: &str,
-) -> Result<(tauri_plugin_global_shortcut::Shortcut, String), String> {
+fn parse_shortcut_input(raw: &str) -> Result<(tauri_plugin_global_shortcut::Shortcut, String), String> {
   let normalized = raw
     .trim()
     .replace('⌘', "Cmd")
@@ -1875,6 +2087,23 @@ fn parse_shortcut_input(
   Ok((shortcut.clone(), format_shortcut(&shortcut)))
 }
 
+fn register_shortcut_with_rollback(
+  manager: &tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>,
+  old: Option<tauri_plugin_global_shortcut::Shortcut>,
+  new_shortcut: tauri_plugin_global_shortcut::Shortcut,
+) -> Result<(), String> {
+  if let Some(prev) = old.clone() {
+    let _ = manager.unregister(prev);
+  }
+  if let Err(err) = manager.register(new_shortcut.clone()) {
+    if let Some(prev) = old {
+      let _ = manager.register(prev);
+    }
+    return Err(format!("注册快捷键失败：{err}"));
+  }
+  Ok(())
+}
+
 fn register_toggle_shortcut(
   app: &AppHandle,
   shortcut: tauri_plugin_global_shortcut::Shortcut,
@@ -1887,25 +2116,74 @@ fn register_toggle_shortcut(
     let guard = state
       .lock()
       .map_err(|_| "failed to lock shortcut state".to_string())?;
-    guard.current.clone()
+    guard.toggle_window.clone()
   };
 
-  if let Some(prev) = old.clone() {
-    let _ = manager.unregister(prev);
-  }
-
-  if let Err(err) = manager.register(shortcut.clone()) {
-    if let Some(prev) = old {
-      let _ = manager.register(prev);
-    }
-    return Err(format!("注册快捷键失败：{err}"));
-  }
+  register_shortcut_with_rollback(&manager, old, shortcut.clone())?;
 
   let mut guard = state
     .lock()
     .map_err(|_| "failed to lock shortcut state".to_string())?;
-  guard.current = Some(shortcut);
-  guard.current_text = label;
+  guard.toggle_window = Some(shortcut);
+  guard.toggle_window_text = label;
+  Ok(())
+}
+
+fn register_mode_shortcut(
+  app: &AppHandle,
+  shortcut: tauri_plugin_global_shortcut::Shortcut,
+  label: String,
+) -> Result<(), String> {
+  let manager = app.global_shortcut();
+  let state = app.state::<Mutex<GlobalShortcutState>>();
+  let old = {
+    let guard = state
+      .lock()
+      .map_err(|_| "failed to lock shortcut state".to_string())?;
+    guard.toggle_mode.clone()
+  };
+
+  register_shortcut_with_rollback(&manager, old, shortcut.clone())?;
+
+  let mut guard = state
+    .lock()
+    .map_err(|_| "failed to lock shortcut state".to_string())?;
+  guard.toggle_mode = Some(shortcut);
+  guard.toggle_mode_text = label;
+  Ok(())
+}
+
+fn set_window_mode_internal(app: &AppHandle, mode: &str) -> Result<(), String> {
+  let normalized_mode = normalize_window_mode(mode);
+  let window = get_main_window(app)?;
+  let ui_state = app.state::<Mutex<UiState>>();
+  let mut state = ui_state
+    .lock()
+    .map_err(|_| "failed to lock ui state".to_string())?;
+
+  if normalized_mode == "cat" {
+    apply_mini_mode(&window).map_err(|err| err.to_string())?;
+    state.mini_mode = true;
+  } else {
+    apply_normal_mode(&window).map_err(|err| err.to_string())?;
+    state.mini_mode = false;
+  }
+  apply_window_traits(
+    &window,
+    state.always_on_top,
+    !is_dev_runtime(),
+    "set_window_mode_internal",
+  )?;
+
+  let payload = WindowModeChangedPayload {
+    mode: normalized_mode.clone(),
+    mini_mode: state.mini_mode,
+  };
+  drop(state);
+  let _ = app.emit("window-mode-changed", payload);
+  let mut cfg = load_app_config_from_file(app)?;
+  cfg.pet.window_mode = normalized_mode;
+  save_app_config_to_file(app, &cfg)?;
   Ok(())
 }
 
@@ -1916,9 +2194,34 @@ fn init_global_shortcut(app: &AppHandle) -> Result<(), Box<dyn std::error::Error
 
   app.plugin(
     tauri_plugin_global_shortcut::Builder::new()
-      .with_handler(move |_app, _current_shortcut, event| {
+      .with_handler(move |_app, current_shortcut, event| {
         if event.state() == ShortcutState::Pressed {
-          let _ = toggle_window_visibility(&app_for_handler);
+          if let Ok(state) = app_for_handler.state::<Mutex<GlobalShortcutState>>().lock() {
+            let shortcut_id = current_shortcut.id();
+            if state
+              .toggle_window
+              .as_ref()
+              .map(|shortcut| shortcut.id() == shortcut_id)
+              .unwrap_or(false)
+            {
+              let _ = toggle_window_visibility(&app_for_handler);
+              return;
+            }
+            if state
+              .toggle_mode
+              .as_ref()
+              .map(|shortcut| shortcut.id() == shortcut_id)
+              .unwrap_or(false)
+            {
+              let current_mode = if let Ok(ui_state) = app_for_handler.state::<Mutex<UiState>>().lock() {
+                if ui_state.mini_mode { "cat" } else { "panel" }
+              } else {
+                "panel"
+              };
+              let next_mode = if current_mode == "cat" { "panel" } else { "cat" };
+              let _ = set_window_mode_internal(&app_for_handler, next_mode);
+            }
+          }
         }
       })
       .build(),
@@ -1947,6 +2250,46 @@ fn init_global_shortcut(app: &AppHandle) -> Result<(), Box<dyn std::error::Error
       let (fallback_shortcut, fallback_label) =
         parse_shortcut_input(DEFAULT_TOGGLE_SHORTCUT).expect("default shortcut should be valid");
       register_toggle_shortcut(app, fallback_shortcut, fallback_label)
+        .map_err(Box::<dyn std::error::Error>::from)?;
+    }
+  }
+
+  let raw_mode_shortcut = cfg.shortcut.toggle_mode.trim();
+  let mode_shortcut_text = if raw_mode_shortcut.is_empty() {
+    DEFAULT_TOGGLE_MODE_SHORTCUT
+  } else {
+    raw_mode_shortcut
+  };
+  match parse_shortcut_input(mode_shortcut_text) {
+    Ok((shortcut, label)) => {
+      if let Ok(lock) = app.state::<Mutex<GlobalShortcutState>>().lock() {
+        if lock
+          .toggle_window
+          .as_ref()
+          .map(|v| v.id() == shortcut.id())
+          .unwrap_or(false)
+        {
+          let fallback = parse_shortcut_input(DEFAULT_TOGGLE_MODE_SHORTCUT)
+            .expect("default mode shortcut should be valid");
+          register_mode_shortcut(app, fallback.0, fallback.1)
+            .map_err(Box::<dyn std::error::Error>::from)?;
+          return Ok(());
+        }
+      }
+      if let Err(err) = register_mode_shortcut(app, shortcut, label.clone()) {
+        eprintln!("[Rust] register configured mode shortcut failed: {}", err);
+        let (fallback_shortcut, fallback_label) =
+          parse_shortcut_input(DEFAULT_TOGGLE_MODE_SHORTCUT)
+            .expect("default mode shortcut should be valid");
+        register_mode_shortcut(app, fallback_shortcut, fallback_label)
+          .map_err(Box::<dyn std::error::Error>::from)?;
+      }
+    }
+    Err(err) => {
+      eprintln!("[Rust] parse configured mode shortcut failed: {}", err);
+      let (fallback_shortcut, fallback_label) = parse_shortcut_input(DEFAULT_TOGGLE_MODE_SHORTCUT)
+        .expect("default mode shortcut should be valid");
+      register_mode_shortcut(app, fallback_shortcut, fallback_label)
         .map_err(Box::<dyn std::error::Error>::from)?;
     }
   }
@@ -1982,6 +2325,16 @@ fn get_window_state(state: State<'_, Mutex<UiState>>) -> Result<WindowStatePaylo
 }
 
 #[tauri::command]
+fn reapply_window_traits(app: AppHandle, state: State<'_, Mutex<UiState>>) -> Result<(), String> {
+  let pinned = state
+    .lock()
+    .map_err(|_| "failed to lock ui state".to_string())?
+    .always_on_top;
+  let window = get_main_window(&app)?;
+  apply_window_traits(&window, pinned, true, "reapply_window_traits")
+}
+
+#[tauri::command]
 fn toggle_always_on_top(
   app: AppHandle,
   state: State<'_, Mutex<UiState>>,
@@ -1992,38 +2345,26 @@ fn toggle_always_on_top(
     .map_err(|_| "failed to lock ui state".to_string())?;
 
   state.always_on_top = !state.always_on_top;
-  window
-    .set_always_on_top(state.always_on_top)
-    .map_err(|err| err.to_string())?;
+  apply_window_traits(
+    &window,
+    state.always_on_top,
+    !is_dev_runtime(),
+    "toggle_always_on_top",
+  )?;
 
   Ok(state.always_on_top)
 }
 
 #[tauri::command]
 fn enter_mini_mode(app: AppHandle, state: State<'_, Mutex<UiState>>) -> Result<(), String> {
-  let window = get_main_window(&app)?;
-  apply_mini_mode(&window).map_err(|err| err.to_string())?;
-
-  let mut state = state
-    .lock()
-    .map_err(|_| "failed to lock ui state".to_string())?;
-  state.mini_mode = true;
-  state.always_on_top = true;
-
-  Ok(())
+  let _ = state;
+  set_window_mode_internal(&app, "cat")
 }
 
 #[tauri::command]
 fn restore_normal_mode(app: AppHandle, state: State<'_, Mutex<UiState>>) -> Result<(), String> {
-  let window = get_main_window(&app)?;
-  apply_normal_mode(&window).map_err(|err| err.to_string())?;
-
-  let mut state = state
-    .lock()
-    .map_err(|_| "failed to lock ui state".to_string())?;
-  state.mini_mode = false;
-
-  Ok(())
+  let _ = state;
+  set_window_mode_internal(&app, "panel")
 }
 
 #[tauri::command]
@@ -2141,7 +2482,7 @@ fn get_shortcut_config(
   let from_runtime = state
     .lock()
     .map_err(|_| "failed to lock shortcut state".to_string())?
-    .current_text
+    .toggle_window_text
     .trim()
     .to_string();
 
@@ -2174,10 +2515,22 @@ fn set_shortcut_config(
     let guard = state
       .lock()
       .map_err(|_| "failed to lock shortcut state".to_string())?;
-    (guard.current.clone(), guard.current_text.clone())
+    (
+      guard.toggle_window.clone(),
+      guard.toggle_window_text.clone(),
+      guard.toggle_mode.clone(),
+    )
   };
 
   let (shortcut, label) = parse_shortcut_input(&toggle_window)?;
+  if previous
+    .2
+    .as_ref()
+    .map(|v| v.id() == shortcut.id())
+    .unwrap_or(false)
+  {
+    return Err("快捷键冲突：与“形态切换快捷键”重复".to_string());
+  }
   register_toggle_shortcut(&app, shortcut, label.clone())?;
 
   let mut cfg = load_app_config_from_file(&app)?;
@@ -2199,6 +2552,132 @@ fn set_shortcut_config(
     message: "快捷键已更新".to_string(),
     applied: Some(label),
   })
+}
+
+#[tauri::command]
+fn get_mode_shortcut_config(
+  app: AppHandle,
+  state: State<'_, Mutex<GlobalShortcutState>>,
+) -> Result<ModeShortcutConfigPayload, String> {
+  let from_runtime = state
+    .lock()
+    .map_err(|_| "failed to lock shortcut state".to_string())?
+    .toggle_mode_text
+    .trim()
+    .to_string();
+  if !from_runtime.is_empty() {
+    return Ok(ModeShortcutConfigPayload {
+      toggle_mode: from_runtime,
+    });
+  }
+
+  let cfg = load_app_config_from_file(&app)?;
+  let raw = cfg.shortcut.toggle_mode.trim();
+  let value = if raw.is_empty() {
+    DEFAULT_TOGGLE_MODE_SHORTCUT.to_string()
+  } else {
+    raw.to_string()
+  };
+  Ok(ModeShortcutConfigPayload {
+    toggle_mode: value,
+  })
+}
+
+#[tauri::command]
+fn set_mode_shortcut_config(
+  app: AppHandle,
+  toggle_mode: String,
+) -> Result<SetShortcutConfigResult, String> {
+  let previous = {
+    let state = app.state::<Mutex<GlobalShortcutState>>();
+    let guard = state
+      .lock()
+      .map_err(|_| "failed to lock shortcut state".to_string())?;
+    (
+      guard.toggle_mode.clone(),
+      guard.toggle_mode_text.clone(),
+      guard.toggle_window.clone(),
+    )
+  };
+
+  let (shortcut, label) = parse_shortcut_input(&toggle_mode)?;
+  if previous
+    .2
+    .as_ref()
+    .map(|v| v.id() == shortcut.id())
+    .unwrap_or(false)
+  {
+    return Err("快捷键冲突：与“唤起窗口快捷键”重复".to_string());
+  }
+
+  register_mode_shortcut(&app, shortcut, label.clone())?;
+
+  let mut cfg = load_app_config_from_file(&app)?;
+  cfg.shortcut.toggle_mode = label.clone();
+  if let Err(err) = save_app_config_to_file(&app, &cfg) {
+    if let Some(prev_shortcut) = previous.0 {
+      let rollback_label = if previous.1.trim().is_empty() {
+        format_shortcut(&prev_shortcut)
+      } else {
+        previous.1
+      };
+      let _ = register_mode_shortcut(&app, prev_shortcut, rollback_label);
+    }
+    return Err(err);
+  }
+
+  Ok(SetShortcutConfigResult {
+    success: true,
+    message: "形态切换快捷键已更新".to_string(),
+    applied: Some(label),
+  })
+}
+
+#[tauri::command]
+fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
+  set_window_mode_internal(&app, &mode)
+}
+
+#[tauri::command]
+fn get_pet_settings(app: AppHandle) -> Result<PetSettingsPayload, String> {
+  let cfg = load_app_config_from_file(&app)?;
+  Ok(PetSettingsPayload {
+    enabled: cfg.pet.enabled,
+    show_badge: cfg.pet.show_badge,
+    animations: cfg.pet.animations,
+    cat_position: PetPositionPayload {
+      x: cfg.pet.cat_position.x,
+      y: cfg.pet.cat_position.y,
+    },
+    window_mode: normalize_window_mode(&cfg.pet.window_mode),
+  })
+}
+
+#[tauri::command]
+fn save_pet_settings(
+  app: AppHandle,
+  enabled: bool,
+  show_badge: bool,
+  animations: bool,
+  cat_x: Option<f64>,
+  cat_y: Option<f64>,
+  window_mode: Option<String>,
+) -> Result<(), String> {
+  let mut cfg = load_app_config_from_file(&app)?;
+  cfg.pet.enabled = enabled;
+  cfg.pet.show_badge = show_badge;
+  cfg.pet.animations = animations;
+  if let Some(x) = cat_x {
+    cfg.pet.cat_position.x = x;
+  }
+  if let Some(y) = cat_y {
+    cfg.pet.cat_position.y = y;
+  }
+  if let Some(mode) = window_mode {
+    cfg.pet.window_mode = normalize_window_mode(&mode);
+  }
+  save_app_config_to_file(&app, &cfg)?;
+  Ok(())
 }
 
 #[tauri::command]
@@ -2650,23 +3129,13 @@ pub fn run() {
     .manage(tokio::sync::RwLock::new(TokenManager::default()))
     .manage(tokio::sync::Mutex::new(()))
     .setup(|app| {
-      #[cfg(target_os = "macos")]
-      {
-        use cocoa::{
-          appkit::{NSColor, NSWindow},
-          base::{id, nil, NO},
-        };
-
-        if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-          if let Ok(ns_window_ptr) = window.ns_window() {
-            let ns_window: id = ns_window_ptr as id;
-            unsafe {
-              ns_window.setBackgroundColor_(NSColor::clearColor(nil));
-              ns_window.setOpaque_(NO);
-              ns_window.setHasShadow_(NO);
-            }
-          }
-        }
+      if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let pinned = app
+          .state::<Mutex<UiState>>()
+          .lock()
+          .map(|state| state.always_on_top)
+          .unwrap_or(true);
+        let _ = apply_window_traits(&window, pinned, false, "setup");
       }
 
       #[cfg(desktop)]
@@ -2679,6 +3148,7 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       check_feishu_api_client,
       get_window_state,
+      reapply_window_traits,
       toggle_always_on_top,
       enter_mini_mode,
       restore_normal_mode,
@@ -2687,6 +3157,11 @@ pub fn run() {
       load_config,
       get_shortcut_config,
       set_shortcut_config,
+      get_mode_shortcut_config,
+      set_mode_shortcut_config,
+      set_window_mode,
+      get_pet_settings,
+      save_pet_settings,
       get_app_mode,
       set_app_mode,
       save_task_order,

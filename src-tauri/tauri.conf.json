@@ -36,7 +36,8 @@
     "targets": ["app", "dmg"],
     "category": "Productivity",
     "macOS": {
-      "signingIdentity": "-",
+      "signingIdentity": "Developer ID Application: Ronghao cui (6Z4232N2L9)",
+      "entitlements": "./Topdo.entitlements",
       "minimumSystemVersion": "10.15",
       "dmg": {
         "windowSize": {

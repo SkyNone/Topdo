@@ -33,4 +33,6 @@ export interface PetSettings {
   animations: boolean;
   catPosition: { x: number; y: number };
   windowMode: WindowMode.Panel | WindowMode.Cat;
+  dailyProgressDate: string;
+  dailyProgressLevel: CatLevel;
 }

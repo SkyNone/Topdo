@@ -40,6 +40,8 @@ const DEFAULT_TOGGLE_MODE_SHORTCUT: &str = "Alt+T";
 const KCG_NORMAL_WINDOW_LEVEL_KEY: i32 = 4;
 #[cfg(target_os = "macos")]
 const KCG_STATUS_WINDOW_LEVEL_KEY: i32 = 9;
+#[cfg(target_os = "macos")]
+const NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_APPLICATIONS: u64 = 1 << 18;
 
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -143,6 +145,10 @@ struct PetConfig {
   cat_position: PetPositionConfig,
   #[serde(default = "default_pet_window_mode")]
   window_mode: String,
+  #[serde(default)]
+  daily_progress_date: String,
+  #[serde(default = "default_daily_progress_level")]
+  daily_progress_level: i32,
 }
 
 impl Default for PetConfig {
@@ -153,6 +159,8 @@ impl Default for PetConfig {
       animations: default_pet_animations(),
       cat_position: PetPositionConfig::default(),
       window_mode: default_pet_window_mode(),
+      daily_progress_date: String::new(),
+      daily_progress_level: default_daily_progress_level(),
     }
   }
 }
@@ -315,6 +323,8 @@ struct PetSettingsPayload {
   animations: bool,
   cat_position: PetPositionPayload,
   window_mode: String,
+  daily_progress_date: String,
+  daily_progress_level: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -404,6 +414,10 @@ fn default_pet_window_mode() -> String {
   "panel".to_string()
 }
 
+fn default_daily_progress_level() -> i32 {
+  1
+}
+
 fn normalize_app_mode(mode: &str) -> String {
   if mode.trim() == "feishu" {
     "feishu".to_string()
@@ -428,6 +442,10 @@ fn normalize_window_mode(value: &str) -> String {
   } else {
     "panel".to_string()
   }
+}
+
+fn normalize_daily_progress_level(value: i32) -> i32 {
+  value.clamp(1, 4)
 }
 
 fn normalize_task(mut task: Task) -> Task {
@@ -552,7 +570,11 @@ fn upsert_task(conn: &Connection, task: &Task) -> Result<(), String> {
         time_spent=excluded.time_spent,
         created_at=excluded.created_at,
         updated_at=excluded.updated_at,
-        completed_at=excluded.completed_at,
+        completed_at=CASE
+          WHEN excluded.status NOT LIKE '%已完成%' THEN excluded.completed_at
+          WHEN excluded.completed_at != '' THEN excluded.completed_at
+          ELSE COALESCE(tasks.completed_at, '')
+        END,
         notes=excluded.notes,
         sort_order=excluded.sort_order,
         source=excluded.source,
@@ -620,6 +642,10 @@ fn is_dev_runtime() -> bool {
   cfg!(debug_assertions)
 }
 
+fn should_include_native_traits(reason: &str) -> bool {
+  !(is_dev_runtime() && reason == "setup")
+}
+
 fn apply_window_traits_safe(window: &WebviewWindow, pinned: bool, reason: &str) -> Result<(), String> {
   eprintln!("[Rust] apply_window_traits_safe start: reason={reason}, pinned={pinned}");
   window
@@ -628,6 +654,9 @@ fn apply_window_traits_safe(window: &WebviewWindow, pinned: bool, reason: &str) 
   window
     .set_visible_on_all_workspaces(pinned)
     .map_err(|err| format!("set visible on all workspaces failed: {err}"))?;
+  eprintln!(
+    "[Rust] apply_window_traits_safe visible_on_all_workspaces set: reason={reason}, pinned={pinned}"
+  );
   eprintln!("[Rust] apply_window_traits_safe done: reason={reason}, pinned={pinned}");
   Ok(())
 }
@@ -655,13 +684,18 @@ fn apply_window_traits_native(
     ns_window.setOpaque_(NO);
     ns_window.setHasShadow_(NO);
     let mut behavior = ns_window.collectionBehavior();
-    let tracked_flags =
-      NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary;
-    if pinned {
-      behavior |= tracked_flags;
+    let original_behavior = behavior;
+    let tracked_mask = NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces.bits()
+      | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary.bits()
+      | NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_APPLICATIONS;
+    let next_bits = if pinned {
+      behavior.bits() | tracked_mask
     } else {
-      behavior &= !tracked_flags;
+      behavior.bits() & !tracked_mask
+    };
+    behavior = NSWindowCollectionBehavior::from_bits_truncate(next_bits);
+    if pinned {
+      // no-op: behavior already updated from the raw bitmask above
     }
     ns_window.setCollectionBehavior_(behavior);
     let level = if pinned {
@@ -670,6 +704,15 @@ fn apply_window_traits_native(
       macos_window_level_for_key(KCG_NORMAL_WINDOW_LEVEL_KEY) as _
     };
     ns_window.setLevel_(level);
+    eprintln!(
+      "[Rust] apply_window_traits_native macos state: reason={reason}, pinned={pinned}, behavior_before=0x{:x}, behavior_after=0x{:x}, level={}, has_can_join_all_spaces={}, has_full_screen_auxiliary={}, has_can_join_all_applications={}",
+      original_behavior.bits(),
+      behavior.bits(),
+      level,
+      (behavior.bits() & NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces.bits()) != 0,
+      (behavior.bits() & NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary.bits()) != 0,
+      (behavior.bits() & NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_APPLICATIONS) != 0
+    );
   }
 
   eprintln!("[Rust] apply_window_traits_native done: reason={reason}, pinned={pinned}");
@@ -836,6 +879,7 @@ fn normalize_loaded_config(mut cfg: AppConfig) -> AppConfig {
     cfg.shortcut.toggle_mode = DEFAULT_TOGGLE_MODE_SHORTCUT.to_string();
   }
   cfg.pet.window_mode = normalize_window_mode(&cfg.pet.window_mode);
+  cfg.pet.daily_progress_level = normalize_daily_progress_level(cfg.pet.daily_progress_level);
   cfg
 }
 
@@ -1224,16 +1268,18 @@ async fn fetch_remote_tasks(app: &AppHandle, filter_completed: bool) -> Result<V
     .into_iter()
     .map(|record| {
       let rid = record.record_id;
+      let status = field_string(&record.fields, "状态");
+      let updated_at = field_string(&record.fields, "任务更新时间");
       Task {
       id: rid.clone(),
       record_id: rid.clone(),
       name: field_string(&record.fields, "任务名称"),
-      status: field_string(&record.fields, "状态"),
+      status,
       priority: field_string(&record.fields, "优先级"),
       task_type: field_string(&record.fields, "类型"),
       time_spent: field_string(&record.fields, "实际耗时(分钟)"),
       created_at: field_string(&record.fields, "任务创建时间"),
-      updated_at: field_string(&record.fields, "任务更新时间"),
+      updated_at,
       completed_at: String::new(),
       notes: field_string(&record.fields, "备注/收获"),
       sort_order: 0,
@@ -1984,6 +2030,12 @@ fn init_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
           let _ = window.unminimize();
           let _ = window.show();
           let _ = window.set_focus();
+          let pinned = app_for_menu
+            .state::<Mutex<UiState>>()
+            .lock()
+            .map(|state| state.always_on_top)
+            .unwrap_or(true);
+          let _ = apply_window_traits(&window, pinned, true, "tray_menu:show:post-show");
         }
       }
       "mini" => {
@@ -1991,6 +2043,13 @@ fn init_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
           let _ = set_window_mode_internal(&app_for_menu, "cat");
           let _ = window.unminimize();
           let _ = window.show();
+          let _ = window.set_focus();
+          let pinned = app_for_menu
+            .state::<Mutex<UiState>>()
+            .lock()
+            .map(|state| state.always_on_top)
+            .unwrap_or(true);
+          let _ = apply_window_traits(&window, pinned, true, "tray_menu:mini:post-show");
         }
       }
       "quit" => {
@@ -2171,7 +2230,7 @@ fn set_window_mode_internal(app: &AppHandle, mode: &str) -> Result<(), String> {
   apply_window_traits(
     &window,
     state.always_on_top,
-    !is_dev_runtime(),
+    should_include_native_traits("set_window_mode_internal"),
     "set_window_mode_internal",
   )?;
 
@@ -2348,7 +2407,7 @@ fn toggle_always_on_top(
   apply_window_traits(
     &window,
     state.always_on_top,
-    !is_dev_runtime(),
+    should_include_native_traits("toggle_always_on_top"),
     "toggle_always_on_top",
   )?;
 
@@ -2650,6 +2709,8 @@ fn get_pet_settings(app: AppHandle) -> Result<PetSettingsPayload, String> {
       y: cfg.pet.cat_position.y,
     },
     window_mode: normalize_window_mode(&cfg.pet.window_mode),
+    daily_progress_date: cfg.pet.daily_progress_date,
+    daily_progress_level: normalize_daily_progress_level(cfg.pet.daily_progress_level),
   })
 }
 
@@ -2662,6 +2723,8 @@ fn save_pet_settings(
   cat_x: Option<f64>,
   cat_y: Option<f64>,
   window_mode: Option<String>,
+  daily_progress_date: Option<String>,
+  daily_progress_level: Option<i32>,
 ) -> Result<(), String> {
   let mut cfg = load_app_config_from_file(&app)?;
   cfg.pet.enabled = enabled;
@@ -2675,6 +2738,12 @@ fn save_pet_settings(
   }
   if let Some(mode) = window_mode {
     cfg.pet.window_mode = normalize_window_mode(&mode);
+  }
+  if let Some(date) = daily_progress_date {
+    cfg.pet.daily_progress_date = date.trim().to_string();
+  }
+  if let Some(level) = daily_progress_level {
+    cfg.pet.daily_progress_level = normalize_daily_progress_level(level);
   }
   save_app_config_to_file(&app, &cfg)?;
   Ok(())
@@ -3135,7 +3204,7 @@ pub fn run() {
           .lock()
           .map(|state| state.always_on_top)
           .unwrap_or(true);
-        let _ = apply_window_traits(&window, pinned, false, "setup");
+        let _ = apply_window_traits(&window, pinned, should_include_native_traits("setup"), "setup");
       }
 
       #[cfg(desktop)]

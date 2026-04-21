@@ -98,6 +98,44 @@ struct ShortcutConfig {
   toggle_window: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PetPositionConfig {
+  x: f64,
+  y: f64,
+}
+
+impl Default for PetPositionConfig {
+  fn default() -> Self {
+    Self { x: 0.0, y: 0.0 }
+  }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PetConfig {
+  #[serde(default = "default_pet_enabled")]
+  enabled: bool,
+  #[serde(default = "default_pet_show_badge")]
+  show_badge: bool,
+  #[serde(default = "default_pet_animations")]
+  animations: bool,
+  #[serde(default)]
+  cat_position: PetPositionConfig,
+  #[serde(default = "default_pet_window_mode")]
+  window_mode: String,
+}
+
+impl Default for PetConfig {
+  fn default() -> Self {
+    Self {
+      enabled: default_pet_enabled(),
+      show_badge: default_pet_show_badge(),
+      animations: default_pet_animations(),
+      cat_position: PetPositionConfig::default(),
+      window_mode: default_pet_window_mode(),
+    }
+  }
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 struct AppConfig {
   #[serde(default)]
@@ -106,6 +144,8 @@ struct AppConfig {
   feishu: FeishuConfig,
   #[serde(default)]
   shortcut: ShortcutConfig,
+  #[serde(default)]
+  pet: PetConfig,
   #[serde(default = "default_sync_interval")]
   sync_interval: i64,
   #[serde(default)]
@@ -234,6 +274,21 @@ struct SetShortcutConfigResult {
   applied: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct PetPositionPayload {
+  x: f64,
+  y: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct PetSettingsPayload {
+  enabled: bool,
+  show_badge: bool,
+  animations: bool,
+  cat_position: PetPositionPayload,
+  window_mode: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct WindowSizePayload {
   width: f64,
@@ -305,6 +360,22 @@ fn default_sync_interval() -> i64 {
   30
 }
 
+fn default_pet_enabled() -> bool {
+  true
+}
+
+fn default_pet_show_badge() -> bool {
+  true
+}
+
+fn default_pet_animations() -> bool {
+  true
+}
+
+fn default_pet_window_mode() -> String {
+  "panel".to_string()
+}
+
 fn normalize_app_mode(mode: &str) -> String {
   if mode.trim() == "feishu" {
     "feishu".to_string()
@@ -320,6 +391,14 @@ fn default_sync_interval_seconds(value: i64) -> i64 {
     value
   } else {
     30
+  }
+}
+
+fn normalize_window_mode(value: &str) -> String {
+  if value.trim() == "cat" {
+    "cat".to_string()
+  } else {
+    "panel".to_string()
   }
 }
 
@@ -617,6 +696,7 @@ fn normalize_loaded_config(mut cfg: AppConfig) -> AppConfig {
   if cfg.shortcut.toggle_window.trim().is_empty() {
     cfg.shortcut.toggle_window = DEFAULT_TOGGLE_SHORTCUT.to_string();
   }
+  cfg.pet.window_mode = normalize_window_mode(&cfg.pet.window_mode);
   cfg
 }
 
@@ -627,6 +707,7 @@ fn default_app_config() -> AppConfig {
     shortcut: ShortcutConfig {
       toggle_window: DEFAULT_TOGGLE_SHORTCUT.to_string(),
     },
+    pet: PetConfig::default(),
     sync_interval: 30,
     created_at: now_iso(),
     app_mode: String::new(),
@@ -666,6 +747,7 @@ fn load_app_config_from_file(app: &AppHandle) -> Result<AppConfig, String> {
         shortcut: ShortcutConfig {
           toggle_window: DEFAULT_TOGGLE_SHORTCUT.to_string(),
         },
+        pet: PetConfig::default(),
         sync_interval: default_sync_interval_seconds(legacy.sync_interval_seconds),
         created_at: now_iso(),
         ..default_app_config()
@@ -2202,6 +2284,47 @@ fn set_shortcut_config(
 }
 
 #[tauri::command]
+fn get_pet_settings(app: AppHandle) -> Result<PetSettingsPayload, String> {
+  let cfg = load_app_config_from_file(&app)?;
+  Ok(PetSettingsPayload {
+    enabled: cfg.pet.enabled,
+    show_badge: cfg.pet.show_badge,
+    animations: cfg.pet.animations,
+    cat_position: PetPositionPayload {
+      x: cfg.pet.cat_position.x,
+      y: cfg.pet.cat_position.y,
+    },
+    window_mode: normalize_window_mode(&cfg.pet.window_mode),
+  })
+}
+
+#[tauri::command]
+fn save_pet_settings(
+  app: AppHandle,
+  enabled: bool,
+  show_badge: bool,
+  animations: bool,
+  cat_x: Option<f64>,
+  cat_y: Option<f64>,
+  window_mode: Option<String>,
+) -> Result<(), String> {
+  let mut cfg = load_app_config_from_file(&app)?;
+  cfg.pet.enabled = enabled;
+  cfg.pet.show_badge = show_badge;
+  cfg.pet.animations = animations;
+  if let Some(x) = cat_x {
+    cfg.pet.cat_position.x = x;
+  }
+  if let Some(y) = cat_y {
+    cfg.pet.cat_position.y = y;
+  }
+  if let Some(mode) = window_mode {
+    cfg.pet.window_mode = normalize_window_mode(&mode);
+  }
+  save_app_config_to_file(&app, &cfg)
+}
+
+#[tauri::command]
 fn get_app_mode(app: AppHandle) -> Result<String, String> {
   let path = config_file_path(&app)?;
   if !path.exists() {
@@ -2687,6 +2810,8 @@ pub fn run() {
       load_config,
       get_shortcut_config,
       set_shortcut_config,
+      get_pet_settings,
+      save_pet_settings,
       get_app_mode,
       set_app_mode,
       save_task_order,

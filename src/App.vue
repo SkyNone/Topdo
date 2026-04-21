@@ -1,17 +1,13 @@
 <template>
   <main class="h-full w-full bg-transparent text-[color:var(--text-primary)]">
-    <section class="app-container relative mx-auto flex h-full w-full flex-col">
+    <section class="app-container relative mx-auto flex h-full w-full flex-col" :class="{ 'app-container-mini': isMiniMode }">
       <div
         v-if="isMiniMode"
         class="mini-shell"
         :class="{ pressed: miniPressed, dragging: miniDragging }"
         @mousedown="onMiniMouseDown"
       >
-        <span class="mini-dot" aria-hidden="true"></span>
-        <div class="mini-content">
-          <span class="mini-count">{{ taskStore.todoCount }}</span>
-          <span class="mini-label">待办</span>
-        </div>
+        <CatPet :show-badge="petStore.showBadge" :animations="petStore.animations" />
       </div>
 
       <template v-else>
@@ -67,6 +63,14 @@
             @request-delete="openDeleteDialog"
           />
 
+          <PanelCatCorner
+            v-if="petStore.enabled"
+            class="panel-corner"
+            :show-badge="petStore.showBadge"
+            :animations="petStore.animations"
+            @collapse="onEnterMiniMode"
+          />
+
           <StatusBar
             :mode="taskStore.mode"
             :task-count="taskStore.tasks.length"
@@ -106,11 +110,13 @@
 
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
-import { LogicalSize } from '@tauri-apps/api/dpi';
+import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import CatPet from './components/CatPet/CatPet.vue';
 import ConfirmDialog from './components/ConfirmDialog.vue';
 import OnboardingBar from './components/OnboardingBar.vue';
+import PanelCatCorner from './components/PanelCatCorner.vue';
 import Settings from './components/Settings.vue';
 import ShortcutSheet from './components/ShortcutSheet.vue';
 import StatsBar from './components/StatsBar.vue';
@@ -118,9 +124,11 @@ import StatusBar from './components/StatusBar.vue';
 import TaskList from './components/TaskList.vue';
 import TitleBar from './components/TitleBar.vue';
 import Welcome from './components/Welcome.vue';
+import { usePetStore } from './stores/petStore';
 import { useTaskStore } from './stores/taskStore';
 import type { TaskFilter } from './stores/taskStore';
 import type { Task } from './types';
+import { WindowMode } from './types/pet';
 import { initializeTheme, toggleThemeQuickly, useThemeState } from './utils/theme';
 
 type ViewType = 'welcome' | 'main' | 'settings';
@@ -136,6 +144,7 @@ interface WindowSizePayload {
 }
 
 const taskStore = useTaskStore();
+const petStore = usePetStore();
 const appWindow = getCurrentWindow();
 
 const currentView = ref<ViewType>('main');
@@ -262,7 +271,9 @@ async function onEnterMiniMode() {
   try {
     await invoke('enter_mini_mode');
     isMiniMode.value = true;
-    isAlwaysOnTop.value = true;
+    petStore.windowMode = WindowMode.Cat;
+    await petStore.save();
+    await applyPetPosition();
   } catch (error) {
     showError(String(error));
   }
@@ -272,8 +283,34 @@ async function restoreNormalMode() {
   try {
     await invoke('restore_normal_mode');
     isMiniMode.value = false;
+    petStore.windowMode = WindowMode.Panel;
+    await petStore.save();
   } catch (error) {
     showError(String(error));
+  }
+}
+
+async function persistPetPosition() {
+  try {
+    const position = await appWindow.outerPosition();
+    petStore.catPosition = {
+      x: Number(position.x ?? 0),
+      y: Number(position.y ?? 0),
+    };
+    await petStore.save();
+  } catch {
+    // ignore position persistence failure
+  }
+}
+
+async function applyPetPosition() {
+  const x = Number(petStore.catPosition.x ?? 0);
+  const y = Number(petStore.catPosition.y ?? 0);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || (x === 0 && y === 0)) return;
+  try {
+    await appWindow.setPosition(new PhysicalPosition(x, y));
+  } catch {
+    // ignore invalid saved position
   }
 }
 
@@ -312,6 +349,8 @@ function onMiniMouseDown(event: MouseEvent) {
     miniStartPoint = null;
     if (shouldRestore) {
       void restoreNormalMode();
+    } else {
+      void persistPetPosition();
     }
     window.setTimeout(() => {
       miniPressed.value = false;
@@ -540,6 +579,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
 
 onMounted(async () => {
   initializeTheme();
+  await petStore.load().catch(() => undefined);
   await syncWindowState();
   try {
     const savedSize = await invoke<WindowSizePayload | null>('get_window_size');
@@ -568,6 +608,14 @@ onMounted(async () => {
   });
 
   await bootstrap();
+  if (isMiniMode.value || petStore.windowMode === WindowMode.Cat) {
+    isMiniMode.value = true;
+    petStore.windowMode = WindowMode.Cat;
+    await applyPetPosition();
+  } else {
+    petStore.windowMode = WindowMode.Panel;
+  }
+  await petStore.save();
   maybeShowOnboarding();
   maybeShowShortcutTip();
   document.addEventListener('visibilitychange', onVisibilityChange);
@@ -621,6 +669,10 @@ watch(
     var(--shadow-sm);
 }
 
+.app-container-mini {
+  overflow: visible;
+}
+
 .mini-shell {
   margin: 2px;
   height: calc(100% - 4px);
@@ -645,30 +697,10 @@ watch(
   cursor: grabbing;
 }
 
-.mini-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--status-pending);
-}
-
-.mini-content {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-}
-
-.mini-count {
-  font-size: 26px;
-  line-height: 1;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.mini-label {
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-secondary);
+.panel-corner {
+  position: absolute;
+  left: 8px;
+  bottom: 34px;
+  z-index: 30;
 }
 </style>

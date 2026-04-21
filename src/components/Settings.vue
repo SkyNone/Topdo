@@ -39,6 +39,24 @@
     </div>
 
     <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
+      <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">宠物模式（2.0）</h3>
+      <div class="mt-3 space-y-2 text-sm">
+        <label class="flex items-center gap-2">
+          <input v-model="petEnabled" type="checkbox" />
+          <span>启用宠物模式</span>
+        </label>
+        <label class="flex items-center gap-2">
+          <input v-model="petShowBadge" type="checkbox" :disabled="!petEnabled" />
+          <span>显示角标（未完成数量）</span>
+        </label>
+        <label class="flex items-center gap-2">
+          <input v-model="petAnimations" type="checkbox" :disabled="!petEnabled" />
+          <span>启用动画效果</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
       <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">外观</h3>
       <div class="mt-3 space-y-2 text-sm">
         <label class="flex items-start gap-2">
@@ -289,6 +307,14 @@ interface SetShortcutConfigResult {
   applied?: string;
 }
 
+interface PetSettingsPayload {
+  enabled: boolean;
+  show_badge: boolean;
+  animations: boolean;
+  cat_position: { x: number; y: number };
+  window_mode: string;
+}
+
 const emit = defineEmits<{
   (event: 'back'): void;
   (event: 'saved', mode: AppMode): void;
@@ -307,6 +333,11 @@ const autostartLoading = ref(false);
 const shortcutDraft = ref('');
 const appliedShortcut = ref('');
 const errorDetailCopied = ref(false);
+const petEnabled = ref(true);
+const petShowBadge = ref(true);
+const petAnimations = ref(true);
+const petPosition = ref({ x: 0, y: 0 });
+const petWindowMode = ref('panel');
 
 const form = reactive<FormState>({
   bitableUrl: '',
@@ -371,6 +402,19 @@ async function onSaveShortcut() {
     setStatus('error', String(error));
   } finally {
     busy.value = false;
+  }
+}
+
+async function loadPetSettings() {
+  try {
+    const payload = await invoke<PetSettingsPayload>('get_pet_settings');
+    petEnabled.value = payload.enabled;
+    petShowBadge.value = payload.show_badge;
+    petAnimations.value = payload.animations;
+    petPosition.value = payload.cat_position || { x: 0, y: 0 };
+    petWindowMode.value = payload.window_mode || 'panel';
+  } catch (error) {
+    setStatus('error', String(error));
   }
 }
 
@@ -521,6 +565,18 @@ async function onSave() {
     if (selectedMode.value === 'feishu') {
       form.appSecret = '';
     }
+    await invoke('save_pet_settings', {
+      enabled: petEnabled.value,
+      showBadge: petShowBadge.value,
+      show_badge: petShowBadge.value,
+      animations: petAnimations.value,
+      catX: petPosition.value.x,
+      cat_x: petPosition.value.x,
+      catY: petPosition.value.y,
+      cat_y: petPosition.value.y,
+      windowMode: petWindowMode.value,
+      window_mode: petWindowMode.value,
+    });
     const verifiedMode = await invoke<string>('get_app_mode');
     console.log('[Settings] 保存后读取模式:', verifiedMode);
     if (verifiedMode !== selectedMode.value) {
@@ -594,6 +650,7 @@ async function onCopyErrorDetail() {
 onMounted(() => {
   void loadConfig();
   void loadShortcutConfig();
+  void loadPetSettings();
   void loadAutostartState();
 });
 

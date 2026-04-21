@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- 尾巴 -->
+  <path d="M88 92 Q102 80 98 66 Q95 58 88 56" stroke="#E0D6CC" stroke-width="5" stroke-linecap="round" fill="none"/>
+  
+  <!-- 身体 -->
+  <ellipse cx="60" cy="92" rx="26" ry="22" fill="#F0E8DF"/>
+  <ellipse cx="60" cy="92" rx="26" ry="22" fill="url(#bodyGrad4)" opacity="0.4"/>
+  <ellipse cx="60" cy="102" rx="22" ry="8" fill="#D4CBC2" opacity="0.25"/>
+  
+  <!-- 前爪 -->
+  <ellipse cx="44" cy="106" rx="7" ry="4" fill="#F5F0EB"/>
+  <ellipse cx="76" cy="106" rx="7" ry="4" fill="#F5F0EB"/>
+  
+  <!-- 头部 -->
+  <circle cx="60" cy="56" r="24" fill="#F5F0EB"/>
+  
+  <!-- 耳朵 -->
+  <path d="M40 40 L42 22 L54 36 Z" fill="#F5F0EB"/>
+  <path d="M43 38 L44 26 L52 36 Z" fill="#FFD4CC" opacity="0.6"/>
+  <path d="M66 36 L76 20 L80 38 Z" fill="#F5F0EB"/>
+  <path d="M69 36 L75 24 L78 37 Z" fill="#FFD4CC" opacity="0.6"/>
+  
+  <!-- 皇冠 -->
+  <g transform="translate(43, 10)">
+    <path d="M0 20 L4 4 L10 14 L17 0 L24 14 L30 4 L34 20 Z" fill="#FFD700"/>
+    <path d="M2 20 L34 20 L32 16 L2 16 Z" fill="#E8B800"/>
+    <circle cx="10" cy="14" r="2.5" fill="#FF6B6B"/>
+    <circle cx="17" cy="8" r="2.5" fill="#FF6B6B"/>
+    <circle cx="24" cy="14" r="2.5" fill="#FF6B6B"/>
+  </g>
+  
+  <!-- 眼睛（骄傲） -->
+  <ellipse cx="50" cy="54" rx="4" ry="4.5" fill="#3A3A3A"/>
+  <ellipse cx="70" cy="54" rx="4" ry="4.5" fill="#3A3A3A"/>
+  <circle cx="52" cy="52" r="1.5" fill="white"/>
+  <circle cx="72" cy="52" r="1.5" fill="white"/>
+  
+  <!-- 鼻子 -->
+  <ellipse cx="60" cy="61" rx="2" ry="1.5" fill="#FFAAAA"/>
+  
+  <!-- 嘴（得意笑） -->
+  <path d="M55 63 Q60 68 65 63" stroke="#CCBBAA" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+  
+  <!-- 腮红 -->
+  <ellipse cx="43" cy="60" rx="5" ry="3" fill="#FFBBBB" opacity="0.4"/>
+  <ellipse cx="77" cy="60" rx="5" ry="3" fill="#FFBBBB" opacity="0.4"/>
+  
+  <!-- 撒花 Confetti -->
+  <g opacity="0.85">
+    <rect x="12" y="20" width="4" height="4" rx="0.5" fill="#FF6B6B" transform="rotate(30 14 22)"/>
+    <rect x="100" y="16" width="4" height="4" rx="0.5" fill="#6BB5FF" transform="rotate(-20 102 18)"/>
+    <rect x="20" y="70" width="3.5" height="3.5" rx="0.5" fill="#66DD88" transform="rotate(45 22 72)"/>
+    <rect x="108" y="60" width="3.5" height="3.5" rx="0.5" fill="#FFD766" transform="rotate(-35 110 62)"/>
+    <circle cx="8" cy="45" r="2" fill="#DD88FF"/>
+    <circle cx="118" cy="40" r="2" fill="#66DDDD"/>
+    <rect x="30" y="8" width="3" height="3" rx="0.5" fill="#FFD766" transform="rotate(20 32 10)"/>
+    <rect x="92" y="6" width="3" height="3" rx="0.5" fill="#FF6B6B" transform="rotate(-25 94 8)"/>
+    <circle cx="24" cy="100" r="1.8" fill="#6BB5FF"/>
+    <circle cx="100" cy="96" r="1.8" fill="#FF88AA"/>
+  </g>
+  
+  <defs>
+    <radialGradient id="bodyGrad4" cx="0.4" cy="0.3">
+      <stop offset="0%" stop-color="#FFF8F2"/>
+      <stop offset="100%" stop-color="#E8DDD3"/>
+    </radialGradient>
+  </defs>
+</svg>

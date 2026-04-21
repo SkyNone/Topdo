@@ -39,6 +39,26 @@
     </div>
 
     <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
+      <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">形态切换快捷键（2.0）</h3>
+      <p class="mt-1 text-[11px] text-[color:var(--text-secondary)]">
+        用于在「面板态 / 猫咪态」间切换。默认：
+        <code class="rounded bg-[color:var(--bg-secondary)] px-1">Alt+T</code>
+      </p>
+      <div class="mt-2 flex items-center gap-2">
+        <input
+          v-model="modeShortcutDraft"
+          type="text"
+          class="flex-1 rounded-[8px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] px-3 py-2 text-sm text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-tertiary)] focus:border-[color:var(--primary)] focus:ring-2 focus:ring-[color:var(--primary-light)]"
+          placeholder="Alt+T"
+        />
+        <button type="button" class="action-btn px-3 py-2" :disabled="busy" @click="onSaveModeShortcut">保存快捷键</button>
+      </div>
+      <p v-if="appliedModeShortcut" class="mt-2 text-[11px] text-[color:var(--text-tertiary)]">
+        当前生效：<span class="font-medium text-[color:var(--text-secondary)]">{{ appliedModeShortcut }}</span>
+      </p>
+    </div>
+
+    <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
       <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">宠物模式（2.0）</h3>
       <div class="mt-3 space-y-2 text-sm">
         <label class="flex items-center gap-2">
@@ -301,6 +321,10 @@ interface ShortcutConfigPayload {
   toggle_window: string;
 }
 
+interface ModeShortcutConfigPayload {
+  toggle_mode: string;
+}
+
 interface SetShortcutConfigResult {
   success: boolean;
   message: string;
@@ -332,6 +356,8 @@ const initialAutostartEnabled = ref(false);
 const autostartLoading = ref(false);
 const shortcutDraft = ref('');
 const appliedShortcut = ref('');
+const modeShortcutDraft = ref('');
+const appliedModeShortcut = ref('');
 const errorDetailCopied = ref(false);
 const petEnabled = ref(true);
 const petShowBadge = ref(true);
@@ -398,6 +424,37 @@ async function onSaveShortcut() {
     shortcutDraft.value = applied;
     appliedShortcut.value = applied;
     setStatus('success', `快捷键已更新为 ${applied}`);
+  } catch (error) {
+    setStatus('error', String(error));
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function loadModeShortcutConfig() {
+  try {
+    const config = await invoke<ModeShortcutConfigPayload>('get_mode_shortcut_config');
+    modeShortcutDraft.value = config.toggle_mode || 'Alt+T';
+    appliedModeShortcut.value = modeShortcutDraft.value;
+  } catch (error) {
+    setStatus('error', String(error));
+  }
+}
+
+async function onSaveModeShortcut() {
+  busy.value = true;
+  try {
+    const result = await invoke<SetShortcutConfigResult>('set_mode_shortcut_config', {
+      toggle_mode: modeShortcutDraft.value,
+      toggleMode: modeShortcutDraft.value,
+    });
+    if (!result.success) {
+      throw new Error(result.message || '形态快捷键保存失败');
+    }
+    const applied = result.applied || modeShortcutDraft.value;
+    modeShortcutDraft.value = applied;
+    appliedModeShortcut.value = applied;
+    setStatus('success', `形态切换快捷键已更新为 ${applied}`);
   } catch (error) {
     setStatus('error', String(error));
   } finally {
@@ -565,6 +622,7 @@ async function onSave() {
     if (selectedMode.value === 'feishu') {
       form.appSecret = '';
     }
+
     await invoke('save_pet_settings', {
       enabled: petEnabled.value,
       showBadge: petShowBadge.value,
@@ -577,6 +635,7 @@ async function onSave() {
       windowMode: petWindowMode.value,
       window_mode: petWindowMode.value,
     });
+
     const verifiedMode = await invoke<string>('get_app_mode');
     console.log('[Settings] 保存后读取模式:', verifiedMode);
     if (verifiedMode !== selectedMode.value) {
@@ -650,6 +709,7 @@ async function onCopyErrorDetail() {
 onMounted(() => {
   void loadConfig();
   void loadShortcutConfig();
+  void loadModeShortcutConfig();
   void loadPetSettings();
   void loadAutostartState();
 });

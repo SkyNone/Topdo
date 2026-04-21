@@ -111,10 +111,11 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
 import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import CatPet from './components/CatPet/CatPet.vue';
 import ConfirmDialog from './components/ConfirmDialog.vue';
+import CatPet from './components/CatPet/CatPet.vue';
 import OnboardingBar from './components/OnboardingBar.vue';
 import PanelCatCorner from './components/PanelCatCorner.vue';
 import Settings from './components/Settings.vue';
@@ -143,6 +144,11 @@ interface WindowSizePayload {
   height: number;
 }
 
+interface WindowModeChangedPayload {
+  mode: 'panel' | 'cat';
+  mini_mode: boolean;
+}
+
 const taskStore = useTaskStore();
 const petStore = usePetStore();
 const appWindow = getCurrentWindow();
@@ -163,6 +169,9 @@ const toast = ref('');
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let unlistenResized: (() => void) | null = null;
+let unlistenWindowModeChanged: UnlistenFn | null = null;
+let unlistenFocusChanged: (() => void) | null = null;
+let initialTraitsRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 const deleteDialogVisible = ref(false);
 const pendingDeleteTask = ref<Task | null>(null);
@@ -199,6 +208,45 @@ async function syncWindowState() {
     const state = await invoke<WindowStatePayload>('get_window_state');
     isMiniMode.value = state.mini_mode;
     isAlwaysOnTop.value = state.always_on_top;
+  } catch {
+    // ignore
+  }
+}
+
+async function reapplyWindowTraits() {
+  try {
+    await invoke('reapply_window_traits');
+  } catch {
+    // ignore
+  }
+}
+
+async function ensureInitialWindowTraitsApplied() {
+  try {
+    await invoke('reapply_window_traits');
+  } catch (error) {
+    console.warn('首次应用窗口 traits 失败，准备重试:', error);
+    if (initialTraitsRetryTimer) {
+      clearTimeout(initialTraitsRetryTimer);
+    }
+    initialTraitsRetryTimer = setTimeout(() => {
+      void reapplyWindowTraits().then(() => reconcileWindowMode());
+    }, 450);
+  }
+}
+
+async function reconcileWindowMode() {
+  try {
+    const state = await invoke<WindowStatePayload>('get_window_state');
+    isMiniMode.value = state.mini_mode;
+    const mode = state.mini_mode ? WindowMode.Cat : WindowMode.Panel;
+    if (petStore.windowMode !== mode) {
+      petStore.windowMode = mode;
+      await petStore.save();
+    }
+    if (state.mini_mode) {
+      await applyPetPosition();
+    }
   } catch {
     // ignore
   }
@@ -269,7 +317,7 @@ async function onTogglePin() {
 
 async function onEnterMiniMode() {
   try {
-    await invoke('enter_mini_mode');
+    await invoke('set_window_mode', { mode: 'cat' });
     isMiniMode.value = true;
     petStore.windowMode = WindowMode.Cat;
     await petStore.save();
@@ -281,7 +329,7 @@ async function onEnterMiniMode() {
 
 async function restoreNormalMode() {
   try {
-    await invoke('restore_normal_mode');
+    await invoke('set_window_mode', { mode: 'panel' });
     isMiniMode.value = false;
     petStore.windowMode = WindowMode.Panel;
     await petStore.save();
@@ -388,8 +436,11 @@ async function onManualSync() {
 }
 
 function onVisibilityChange() {
-  if (document.visibilityState === 'visible' && taskStore.mode === 'feishu' && currentView.value === 'main') {
-    void taskStore.triggerSync().catch((error) => showError(String(error)));
+  if (document.visibilityState === 'visible') {
+    void reapplyWindowTraits().then(() => reconcileWindowMode());
+    if (taskStore.mode === 'feishu' && currentView.value === 'main') {
+      void taskStore.triggerSync().catch((error) => showError(String(error)));
+    }
   }
 }
 
@@ -581,6 +632,15 @@ onMounted(async () => {
   initializeTheme();
   await petStore.load().catch(() => undefined);
   await syncWindowState();
+  unlistenWindowModeChanged = await listen<WindowModeChangedPayload>('window-mode-changed', (event) => {
+    const payload = event.payload;
+    isMiniMode.value = payload.mini_mode;
+    petStore.windowMode = payload.mode === 'cat' ? WindowMode.Cat : WindowMode.Panel;
+    void petStore.save();
+    if (payload.mode === 'cat') {
+      void applyPetPosition();
+    }
+  });
   try {
     const savedSize = await invoke<WindowSizePayload | null>('get_window_size');
     if (savedSize && savedSize.width > 0 && savedSize.height > 0) {
@@ -606,6 +666,11 @@ onMounted(async () => {
       }
     }, 500);
   });
+  unlistenFocusChanged = await appWindow.onFocusChanged(({ payload }) => {
+    if (payload) {
+      void reapplyWindowTraits().then(() => reconcileWindowMode());
+    }
+  });
 
   await bootstrap();
   if (isMiniMode.value || petStore.windowMode === WindowMode.Cat) {
@@ -616,6 +681,7 @@ onMounted(async () => {
     petStore.windowMode = WindowMode.Panel;
   }
   await petStore.save();
+  await ensureInitialWindowTraitsApplied();
   maybeShowOnboarding();
   maybeShowShortcutTip();
   document.addEventListener('visibilitychange', onVisibilityChange);
@@ -630,9 +696,21 @@ onUnmounted(() => {
     unlistenResized();
     unlistenResized = null;
   }
+  if (unlistenWindowModeChanged) {
+    unlistenWindowModeChanged();
+    unlistenWindowModeChanged = null;
+  }
+  if (unlistenFocusChanged) {
+    unlistenFocusChanged();
+    unlistenFocusChanged = null;
+  }
   if (resizeTimer) {
     clearTimeout(resizeTimer);
     resizeTimer = null;
+  }
+  if (initialTraitsRetryTimer) {
+    clearTimeout(initialTraitsRetryTimer);
+    initialTraitsRetryTimer = null;
   }
   if (toastTimer) {
     clearTimeout(toastTimer);
@@ -656,9 +734,9 @@ watch(
 .app-container {
   width: 100%;
   height: 100%;
-  background: var(--bg-primary);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: var(--bg-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border-radius: 12px;
   border: 0.5px solid var(--border-light);
   overflow: hidden;
@@ -670,27 +748,33 @@ watch(
 }
 
 .app-container-mini {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   overflow: visible;
 }
 
 .mini-shell {
-  margin: 2px;
-  height: calc(100% - 4px);
-  width: calc(100% - 4px);
-  border-radius: 999px;
-  border: 0.5px solid color-mix(in srgb, var(--border) 82%, transparent);
-  background: color-mix(in srgb, var(--bg-solid) 94%, transparent);
-  box-shadow: var(--shadow-sm);
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  box-shadow: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 0;
   cursor: grab;
   user-select: none;
 }
 
 .mini-shell.pressed {
-  background: color-mix(in srgb, var(--primary) 9%, var(--bg-solid));
+  transform: scale(0.98);
 }
 
 .mini-shell.dragging {

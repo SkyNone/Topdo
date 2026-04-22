@@ -93,6 +93,53 @@ Topdo 是一个“**常驻、低打扰、键盘优先**”的任务悬浮窗：
 
 ---
 
+## 2.0 宠物模式（阶段一）
+
+- 新增两种窗口形态：`面板态` / `猫咪态`
+- 默认形态切换快捷键：`⌥T`（可在设置页自定义）
+- 猫咪等级随今日完成进度变化：Sleeping / Awake / Happy / Crowned
+- 支持角标显示未完成数量、可选动画开关、位置记忆
+
+> 说明：阶段一先上线猫咪态，不含顶部吸附灵动岛能力。
+
+### 猫咪状态切换规则
+
+- 今天完成第 `1` 个任务：`awake`
+- 今天完成第 `3` 个任务：`happy`
+- 当天全部任务都已完成：`crowned`
+- 当天未完成任何任务：`sleeping`
+- 判定口径：仅统计 `completed_at` 落在今天、且当前状态仍为“已完成”的任务
+- 同一天内小猫保持当天已达成的最高状态，不会因为新增任务或回退任务立刻降级
+- 次日首次打开应用后，今日进度会自动重置
+- 瞬态动画：
+  - 新增任务：`new_task`（0.5 秒）
+  - 首次达到当天全部完成：`celebrate`（2 秒）
+
+### 今日进度激励
+
+- 飞书模式下，完成任务后小猫会立即更新状态，不必等待下一轮同步
+- 小猫更偏向“正向反馈”，强调今天完成了多少，而不是总库存完成率
+- 对于任务少的用户，完成 1 个任务也能立刻看到从 `sleeping` 到 `awake` 的变化
+
+### 宠物素材规范（阶段一）
+
+- 文件名固定：`sleeping.svg`、`awake.svg`、`happy.svg`、`crowned.svg`
+- 资源策略：仅加载 SVG（不再回退 PNG），避免白底素材误渲染
+- 推荐规格：透明背景、像素风主体居中
+- 若素材缺失或加载失败，应用会自动降级为透明占位渲染，避免出现白色方块
+
+---
+
+## 唤起快捷键冲突处理
+
+如果 `⌘⇧T` 与浏览器或输入法冲突，可在设置页「全局唤起快捷键」中修改。
+
+- 推荐组合：`Cmd+Alt+T`、`Cmd+Shift+Y`
+- 规则：必须包含至少一个修饰键（Cmd/Alt/Ctrl/Shift）
+- 避免与应用内保留快捷键冲突：`⌘N`、`⌘K`、`⌘1~⌘4`、`⌘⇧R`、`⌘⇧L`
+
+---
+
 ## 飞书同步配置
 
 在设置页填写以下字段：
@@ -107,6 +154,8 @@ Topdo 是一个“**常驻、低打扰、键盘优先**”的任务悬浮窗：
 - 应用已开通 bitable 相关权限
 - 应用与目标多维表格在同一租户
 - 应用版本已发布可用
+
+如果报错较长，设置页已支持“复制错误详情”，可直接贴给开发者排查。
 
 ---
 
@@ -133,6 +182,9 @@ pnpm install
 pnpm tauri dev
 ```
 
+> macOS 透明窗口依赖 `src-tauri/tauri.conf.json` 中的 `app.macOSPrivateApi: true`。  
+> 这会启用 macOS private API，因此不适合 App Store 分发。
+
 ### 常用命令
 
 ```bash
@@ -153,7 +205,7 @@ pnpm release:mac
 产物路径：
 
 - `.app`：`src-tauri/target/universal-apple-darwin/release/bundle/macos/Topdo.app`
-- `.dmg`：`src-tauri/target/universal-apple-darwin/release/bundle/dmg/Topdo_1.0.0_universal.dmg`
+- `.dmg`：`src-tauri/target/universal-apple-darwin/release/bundle/dmg/Topdo_1.0.1_universal.dmg`
 
 ---
 

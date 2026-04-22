@@ -1,17 +1,13 @@
 <template>
   <main class="h-full w-full bg-transparent text-[color:var(--text-primary)]">
-    <section class="app-container relative mx-auto flex h-full w-full flex-col">
+    <section class="app-container relative mx-auto flex h-full w-full flex-col" :class="{ 'app-container-mini': isMiniMode }">
       <div
         v-if="isMiniMode"
         class="mini-shell"
         :class="{ pressed: miniPressed, dragging: miniDragging }"
         @mousedown="onMiniMouseDown"
       >
-        <span class="mini-dot" aria-hidden="true"></span>
-        <div class="mini-content">
-          <span class="mini-count">{{ taskStore.todoCount }}</span>
-          <span class="mini-label">待办</span>
-        </div>
+        <CatPet :show-badge="petStore.showBadge" :animations="petStore.animations" />
       </div>
 
       <template v-else>
@@ -67,6 +63,14 @@
             @request-delete="openDeleteDialog"
           />
 
+          <PanelCatCorner
+            v-if="petStore.enabled"
+            class="panel-corner"
+            :show-badge="petStore.showBadge"
+            :animations="petStore.animations"
+            @collapse="onEnterMiniMode"
+          />
+
           <StatusBar
             :mode="taskStore.mode"
             :task-count="taskStore.tasks.length"
@@ -97,6 +101,8 @@
         @close="shortcutSheetVisible = false"
       />
 
+      <CrownedCelebration :visible="showCelebration" @close="closeCelebration" />
+
       <div v-if="toast" class="pointer-events-none absolute bottom-3 left-1/2 z-40 -translate-x-1/2 rounded-[var(--radius-btn)] bg-[#212529] px-3 py-1.5 text-[var(--font-size-sm)] text-white">
         {{ toast }}
       </div>
@@ -106,11 +112,15 @@
 
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
-import { LogicalSize } from '@tauri-apps/api/dpi';
+import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import ConfirmDialog from './components/ConfirmDialog.vue';
+import CatPet from './components/CatPet/CatPet.vue';
+import CrownedCelebration from './components/CrownedCelebration.vue';
 import OnboardingBar from './components/OnboardingBar.vue';
+import PanelCatCorner from './components/PanelCatCorner.vue';
 import Settings from './components/Settings.vue';
 import ShortcutSheet from './components/ShortcutSheet.vue';
 import StatsBar from './components/StatsBar.vue';
@@ -118,9 +128,12 @@ import StatusBar from './components/StatusBar.vue';
 import TaskList from './components/TaskList.vue';
 import TitleBar from './components/TitleBar.vue';
 import Welcome from './components/Welcome.vue';
+import { usePetStore } from './stores/petStore';
 import { useTaskStore } from './stores/taskStore';
 import type { TaskFilter } from './stores/taskStore';
 import type { Task } from './types';
+import { WindowMode } from './types/pet';
+import { useCatState } from './composables/useCatState';
 import { initializeTheme, toggleThemeQuickly, useThemeState } from './utils/theme';
 
 type ViewType = 'welcome' | 'main' | 'settings';
@@ -135,7 +148,14 @@ interface WindowSizePayload {
   height: number;
 }
 
+interface WindowModeChangedPayload {
+  mode: 'panel' | 'cat';
+  mini_mode: boolean;
+}
+
 const taskStore = useTaskStore();
+const petStore = usePetStore();
+const { showCelebration, closeCelebration } = useCatState();
 const appWindow = getCurrentWindow();
 
 const currentView = ref<ViewType>('main');
@@ -154,6 +174,9 @@ const toast = ref('');
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let unlistenResized: (() => void) | null = null;
+let unlistenWindowModeChanged: UnlistenFn | null = null;
+let unlistenFocusChanged: (() => void) | null = null;
+let initialTraitsRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 const deleteDialogVisible = ref(false);
 const pendingDeleteTask = ref<Task | null>(null);
@@ -190,6 +213,45 @@ async function syncWindowState() {
     const state = await invoke<WindowStatePayload>('get_window_state');
     isMiniMode.value = state.mini_mode;
     isAlwaysOnTop.value = state.always_on_top;
+  } catch {
+    // ignore
+  }
+}
+
+async function reapplyWindowTraits() {
+  try {
+    await invoke('reapply_window_traits');
+  } catch {
+    // ignore
+  }
+}
+
+async function ensureInitialWindowTraitsApplied() {
+  try {
+    await invoke('reapply_window_traits');
+  } catch (error) {
+    console.warn('首次应用窗口 traits 失败，准备重试:', error);
+    if (initialTraitsRetryTimer) {
+      clearTimeout(initialTraitsRetryTimer);
+    }
+    initialTraitsRetryTimer = setTimeout(() => {
+      void reapplyWindowTraits().then(() => reconcileWindowMode());
+    }, 450);
+  }
+}
+
+async function reconcileWindowMode() {
+  try {
+    const state = await invoke<WindowStatePayload>('get_window_state');
+    isMiniMode.value = state.mini_mode;
+    const mode = state.mini_mode ? WindowMode.Cat : WindowMode.Panel;
+    if (petStore.windowMode !== mode) {
+      petStore.windowMode = mode;
+      await petStore.save();
+    }
+    if (state.mini_mode) {
+      await applyCatPosition();
+    }
   } catch {
     // ignore
   }
@@ -260,9 +322,12 @@ async function onTogglePin() {
 
 async function onEnterMiniMode() {
   try {
-    await invoke('enter_mini_mode');
+    await invoke('set_window_mode', { mode: 'cat' });
+    await invoke('set_window_visible_on_all_spaces', { visible: true });
     isMiniMode.value = true;
-    isAlwaysOnTop.value = true;
+    petStore.windowMode = WindowMode.Cat;
+    await petStore.save();
+    await applyCatPosition();
   } catch (error) {
     showError(String(error));
   }
@@ -270,10 +335,37 @@ async function onEnterMiniMode() {
 
 async function restoreNormalMode() {
   try {
-    await invoke('restore_normal_mode');
+    await invoke('set_window_mode', { mode: 'panel' });
+    await invoke('set_window_visible_on_all_spaces', { visible: true });
     isMiniMode.value = false;
+    petStore.windowMode = WindowMode.Panel;
+    await petStore.save();
   } catch (error) {
     showError(String(error));
+  }
+}
+
+async function persistMiniPosition() {
+  try {
+    const position = await appWindow.outerPosition();
+    petStore.catPosition = {
+      x: Number(position.x ?? 0),
+      y: Number(position.y ?? 0),
+    };
+    await petStore.save();
+  } catch {
+    // ignore position persistence failure
+  }
+}
+
+async function applyCatPosition() {
+  const x = Number(petStore.catPosition.x ?? 0);
+  const y = Number(petStore.catPosition.y ?? 0);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || (x === 0 && y === 0)) return;
+  try {
+    await appWindow.setPosition(new PhysicalPosition(x, y));
+  } catch {
+    // ignore invalid saved position
   }
 }
 
@@ -312,6 +404,8 @@ function onMiniMouseDown(event: MouseEvent) {
     miniStartPoint = null;
     if (shouldRestore) {
       void restoreNormalMode();
+    } else {
+      void persistMiniPosition();
     }
     window.setTimeout(() => {
       miniPressed.value = false;
@@ -349,8 +443,11 @@ async function onManualSync() {
 }
 
 function onVisibilityChange() {
-  if (document.visibilityState === 'visible' && taskStore.mode === 'feishu' && currentView.value === 'main') {
-    void taskStore.triggerSync().catch((error) => showError(String(error)));
+  if (document.visibilityState === 'visible') {
+    void reapplyWindowTraits().then(() => reconcileWindowMode());
+    if (taskStore.mode === 'feishu' && currentView.value === 'main') {
+      void taskStore.triggerSync().catch((error) => showError(String(error)));
+    }
   }
 }
 
@@ -540,7 +637,22 @@ function onGlobalKeydown(event: KeyboardEvent) {
 
 onMounted(async () => {
   initializeTheme();
+  await petStore.load().catch(() => undefined);
+  try {
+    await invoke('set_window_visible_on_all_spaces', { visible: true });
+  } catch (error) {
+    console.error('Failed to set visible on all spaces:', error);
+  }
   await syncWindowState();
+  unlistenWindowModeChanged = await listen<WindowModeChangedPayload>('window-mode-changed', (event) => {
+    const payload = event.payload;
+    isMiniMode.value = payload.mini_mode;
+    petStore.windowMode = payload.mode === 'cat' ? WindowMode.Cat : WindowMode.Panel;
+    void petStore.save();
+    if (payload.mode === 'cat') {
+      void applyCatPosition();
+    }
+  });
   try {
     const savedSize = await invoke<WindowSizePayload | null>('get_window_size');
     if (savedSize && savedSize.width > 0 && savedSize.height > 0) {
@@ -566,8 +678,23 @@ onMounted(async () => {
       }
     }, 500);
   });
+  unlistenFocusChanged = await appWindow.onFocusChanged(({ payload }) => {
+    if (payload) {
+      void reapplyWindowTraits().then(() => reconcileWindowMode());
+    }
+  });
 
   await bootstrap();
+  if (isMiniMode.value || petStore.windowMode === WindowMode.Cat) {
+    isMiniMode.value = true;
+    petStore.windowMode = WindowMode.Cat;
+    await invoke('set_window_mode', { mode: 'cat' });
+    await applyCatPosition();
+  } else {
+    petStore.windowMode = WindowMode.Panel;
+  }
+  await petStore.save();
+  await ensureInitialWindowTraitsApplied();
   maybeShowOnboarding();
   maybeShowShortcutTip();
   document.addEventListener('visibilitychange', onVisibilityChange);
@@ -582,9 +709,21 @@ onUnmounted(() => {
     unlistenResized();
     unlistenResized = null;
   }
+  if (unlistenWindowModeChanged) {
+    unlistenWindowModeChanged();
+    unlistenWindowModeChanged = null;
+  }
+  if (unlistenFocusChanged) {
+    unlistenFocusChanged();
+    unlistenFocusChanged = null;
+  }
   if (resizeTimer) {
     clearTimeout(resizeTimer);
     resizeTimer = null;
+  }
+  if (initialTraitsRetryTimer) {
+    clearTimeout(initialTraitsRetryTimer);
+    initialTraitsRetryTimer = null;
   }
   if (toastTimer) {
     clearTimeout(toastTimer);
@@ -608,9 +747,9 @@ watch(
 .app-container {
   width: 100%;
   height: 100%;
-  background: var(--bg-primary);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: var(--bg-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border-radius: 12px;
   border: 0.5px solid var(--border-light);
   overflow: hidden;
@@ -621,54 +760,44 @@ watch(
     var(--shadow-sm);
 }
 
+.app-container-mini {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  overflow: visible;
+}
+
 .mini-shell {
-  margin: 2px;
-  height: calc(100% - 4px);
-  width: calc(100% - 4px);
-  border-radius: 999px;
-  border: 0.5px solid color-mix(in srgb, var(--border) 82%, transparent);
-  background: color-mix(in srgb, var(--bg-solid) 94%, transparent);
-  box-shadow: var(--shadow-sm);
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  box-shadow: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 0;
   cursor: grab;
   user-select: none;
 }
 
 .mini-shell.pressed {
-  background: color-mix(in srgb, var(--primary) 9%, var(--bg-solid));
+  transform: scale(0.98);
 }
 
 .mini-shell.dragging {
   cursor: grabbing;
 }
 
-.mini-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--status-pending);
-}
-
-.mini-content {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-}
-
-.mini-count {
-  font-size: 26px;
-  line-height: 1;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.mini-label {
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-secondary);
+.panel-corner {
+  position: absolute;
+  left: 8px;
+  bottom: 34px;
+  z-index: 30;
 }
 </style>

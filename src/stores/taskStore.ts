@@ -66,6 +66,14 @@ function normalizeStatusLabel(status: string): string {
   return '待处理';
 }
 
+function completedAtForStatus(status: string, previousCompletedAt = ''): string {
+  const key = normalizeStatus(status);
+  if (key === 'completed') {
+    return previousCompletedAt || nowUnixSecondsString();
+  }
+  return '';
+}
+
 function mergeTask(base: Task, patch: Partial<Task>): Task {
   return {
     ...base,
@@ -396,6 +404,7 @@ export const useTaskStore = defineStore('task', {
       const normalizedStatus = normalizeStatusLabel(toStatus);
       this.setTaskPatch(recordId, {
         status: normalizedStatus,
+        completed_at: completedAtForStatus(normalizedStatus, previous.completed_at),
         sync_status: this.mode === 'feishu' ? 'pending' : 'synced'
       });
       const current = this.tasks.find((task) => task.record_id === recordId || task.id === recordId);

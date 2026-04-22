@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- 尾巴 -->
+  <path d="M88 88 Q102 76 98 62 Q95 54 88 52" stroke="#E0D6CC" stroke-width="5" stroke-linecap="round" fill="none"/>
+  
+  <!-- 身体 -->
+  <ellipse cx="60" cy="88" rx="26" ry="22" fill="#F0E8DF"/>
+  <ellipse cx="60" cy="88" rx="26" ry="22" fill="url(#bodyGrad3)" opacity="0.4"/>
+  <ellipse cx="60" cy="98" rx="22" ry="8" fill="#D4CBC2" opacity="0.25"/>
+  
+  <!-- 前爪 -->
+  <ellipse cx="44" cy="102" rx="7" ry="4" fill="#F5F0EB"/>
+  <ellipse cx="76" cy="102" rx="7" ry="4" fill="#F5F0EB"/>
+  
+  <!-- 围巾 -->
+  <path d="M36 70 Q60 78 84 70" stroke="#E05555" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M36 70 Q60 78 84 70" stroke="#CC4444" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.5" stroke-dasharray="0" transform="translate(0,2)"/>
+  <!-- 围巾末端 -->
+  <path d="M48 74 L44 90" stroke="#E05555" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M52 75 L50 88" stroke="#CC4444" stroke-width="4" stroke-linecap="round" fill="none"/>
+  
+  <!-- 头部 -->
+  <circle cx="60" cy="52" r="24" fill="#F5F0EB"/>
+  
+  <!-- 耳朵 -->
+  <path d="M40 36 L42 18 L54 32 Z" fill="#F5F0EB"/>
+  <path d="M43 34 L44 22 L52 32 Z" fill="#FFD4CC" opacity="0.6"/>
+  <path d="M66 32 L76 16 L80 34 Z" fill="#F5F0EB"/>
+  <path d="M69 32 L75 20 L78 33 Z" fill="#FFD4CC" opacity="0.6"/>
+  
+  <!-- 开心眯眼 ^_^ -->
+  <path d="M46 48 Q50 54 54 48" stroke="#3A3A3A" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <path d="M66 48 Q70 54 74 48" stroke="#3A3A3A" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  
+  <!-- 鼻子 -->
+  <ellipse cx="60" cy="57" rx="2" ry="1.5" fill="#FFAAAA"/>
+  
+  <!-- 嘴（微笑） -->
+  <path d="M56 60 Q60 64 64 60" stroke="#CCBBAA" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+  
+  <!-- 腮红（更红） -->
+  <ellipse cx="43" cy="56" rx="5" ry="3" fill="#FFBBBB" opacity="0.4"/>
+  <ellipse cx="77" cy="56" rx="5" ry="3" fill="#FFBBBB" opacity="0.4"/>
+  
+  <!-- Sparkles ✨ -->
+  <g opacity="0.8">
+    <!-- 左上 -->
+    <line x1="16" y1="30" x2="16" y2="22" stroke="#FFE066" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="12" y1="26" x2="20" y2="26" stroke="#FFE066" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- 右上 -->
+    <line x1="108" y1="24" x2="108" y2="16" stroke="#FFE066" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="104" y1="20" x2="112" y2="20" stroke="#FFE066" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- 左下 -->
+    <circle cx="10" cy="80" r="2" fill="#FFE066" opacity="0.6"/>
+    <!-- 右下 -->
+    <circle cx="116" cy="70" r="2" fill="#FFE066" opacity="0.6"/>
+  </g>
+  
+  <defs>
+    <radialGradient id="bodyGrad3" cx="0.4" cy="0.3">
+      <stop offset="0%" stop-color="#FFF8F2"/>
+      <stop offset="100%" stop-color="#E8DDD3"/>
+    </radialGradient>
+  </defs>
+</svg>

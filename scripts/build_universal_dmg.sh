@@ -5,15 +5,15 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PRODUCT="Topdo"
-VERSION="1.0.0"
+VERSION="1.0.1"
 APP_NAME="$PRODUCT.app"
 NOTICE_FILE="$ROOT_DIR/docs/01_安装说明.txt"
 
 echo "[1/3] 确保 Rust 双目标已安装..."
 rustup target add x86_64-apple-darwin >/dev/null
 
-echo "[2/3] 构建 Universal app + dmg..."
-pnpm tauri build --target universal-apple-darwin --bundles app,dmg
+echo "[2/3] 构建 Universal app..."
+pnpm tauri build --target universal-apple-darwin --bundles app
 
 BUNDLE_BASE="$ROOT_DIR/src-tauri/target/universal-apple-darwin/release/bundle"
 DMG_DIR="$BUNDLE_BASE/dmg"
@@ -23,13 +23,10 @@ VOL_ICON="$DMG_DIR/icon.icns"
 APP_PATH="$MACOS_DIR/$APP_NAME"
 OUTPUT_DMG="$DMG_DIR/${PRODUCT}_${VERSION}_universal.dmg"
 TEMP_DMG="$DMG_DIR/${PRODUCT}_${VERSION}_universal_with_notice.dmg"
+SRC_FOLDER="$MACOS_DIR"
 
 if [ ! -d "$APP_PATH" ]; then
   echo "[错误] 未找到 app: $APP_PATH"
-  exit 1
-fi
-if [ ! -f "$OUTPUT_DMG" ]; then
-  echo "[错误] 未找到 dmg: $OUTPUT_DMG"
   exit 1
 fi
 if [ ! -f "$BUNDLE_DMG_SH" ]; then
@@ -43,6 +40,7 @@ fi
 
 echo "[3/3] 重新打包 DMG（注入安装说明）..."
 rm -f "$TEMP_DMG"
+rm -f "$OUTPUT_DMG"
 "$BUNDLE_DMG_SH" \
   --volname "$PRODUCT" \
   --icon "$APP_NAME" 180 220 \
@@ -52,7 +50,7 @@ rm -f "$TEMP_DMG"
   --add-file "01_安装说明.txt" "$NOTICE_FILE" 330 320 \
   --volicon "$VOL_ICON" \
   "$TEMP_DMG" \
-  "$APP_PATH"
+  "$SRC_FOLDER"
 mv -f "$TEMP_DMG" "$OUTPUT_DMG"
 
 echo "[完成] 发布包已生成"

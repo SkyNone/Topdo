@@ -101,6 +101,8 @@
         @close="shortcutSheetVisible = false"
       />
 
+      <CrownedCelebration :visible="showCelebration" @close="closeCelebration" />
+
       <div v-if="toast" class="pointer-events-none absolute bottom-3 left-1/2 z-40 -translate-x-1/2 rounded-[var(--radius-btn)] bg-[#212529] px-3 py-1.5 text-[var(--font-size-sm)] text-white">
         {{ toast }}
       </div>
@@ -116,6 +118,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import ConfirmDialog from './components/ConfirmDialog.vue';
 import CatPet from './components/CatPet/CatPet.vue';
+import CrownedCelebration from './components/CrownedCelebration.vue';
 import OnboardingBar from './components/OnboardingBar.vue';
 import PanelCatCorner from './components/PanelCatCorner.vue';
 import Settings from './components/Settings.vue';
@@ -130,6 +133,7 @@ import { useTaskStore } from './stores/taskStore';
 import type { TaskFilter } from './stores/taskStore';
 import type { Task } from './types';
 import { WindowMode } from './types/pet';
+import { useCatState } from './composables/useCatState';
 import { initializeTheme, toggleThemeQuickly, useThemeState } from './utils/theme';
 
 type ViewType = 'welcome' | 'main' | 'settings';
@@ -151,6 +155,7 @@ interface WindowModeChangedPayload {
 
 const taskStore = useTaskStore();
 const petStore = usePetStore();
+const { showCelebration, closeCelebration } = useCatState();
 const appWindow = getCurrentWindow();
 
 const currentView = ref<ViewType>('main');
@@ -245,7 +250,7 @@ async function reconcileWindowMode() {
       await petStore.save();
     }
     if (state.mini_mode) {
-      await applyPetPosition();
+      await applyCatPosition();
     }
   } catch {
     // ignore
@@ -318,10 +323,11 @@ async function onTogglePin() {
 async function onEnterMiniMode() {
   try {
     await invoke('set_window_mode', { mode: 'cat' });
+    await invoke('set_window_visible_on_all_spaces', { visible: true });
     isMiniMode.value = true;
     petStore.windowMode = WindowMode.Cat;
     await petStore.save();
-    await applyPetPosition();
+    await applyCatPosition();
   } catch (error) {
     showError(String(error));
   }
@@ -330,6 +336,7 @@ async function onEnterMiniMode() {
 async function restoreNormalMode() {
   try {
     await invoke('set_window_mode', { mode: 'panel' });
+    await invoke('set_window_visible_on_all_spaces', { visible: true });
     isMiniMode.value = false;
     petStore.windowMode = WindowMode.Panel;
     await petStore.save();
@@ -338,7 +345,7 @@ async function restoreNormalMode() {
   }
 }
 
-async function persistPetPosition() {
+async function persistMiniPosition() {
   try {
     const position = await appWindow.outerPosition();
     petStore.catPosition = {
@@ -351,7 +358,7 @@ async function persistPetPosition() {
   }
 }
 
-async function applyPetPosition() {
+async function applyCatPosition() {
   const x = Number(petStore.catPosition.x ?? 0);
   const y = Number(petStore.catPosition.y ?? 0);
   if (!Number.isFinite(x) || !Number.isFinite(y) || (x === 0 && y === 0)) return;
@@ -398,7 +405,7 @@ function onMiniMouseDown(event: MouseEvent) {
     if (shouldRestore) {
       void restoreNormalMode();
     } else {
-      void persistPetPosition();
+      void persistMiniPosition();
     }
     window.setTimeout(() => {
       miniPressed.value = false;
@@ -631,6 +638,11 @@ function onGlobalKeydown(event: KeyboardEvent) {
 onMounted(async () => {
   initializeTheme();
   await petStore.load().catch(() => undefined);
+  try {
+    await invoke('set_window_visible_on_all_spaces', { visible: true });
+  } catch (error) {
+    console.error('Failed to set visible on all spaces:', error);
+  }
   await syncWindowState();
   unlistenWindowModeChanged = await listen<WindowModeChangedPayload>('window-mode-changed', (event) => {
     const payload = event.payload;
@@ -638,7 +650,7 @@ onMounted(async () => {
     petStore.windowMode = payload.mode === 'cat' ? WindowMode.Cat : WindowMode.Panel;
     void petStore.save();
     if (payload.mode === 'cat') {
-      void applyPetPosition();
+      void applyCatPosition();
     }
   });
   try {
@@ -676,7 +688,8 @@ onMounted(async () => {
   if (isMiniMode.value || petStore.windowMode === WindowMode.Cat) {
     isMiniMode.value = true;
     petStore.windowMode = WindowMode.Cat;
-    await applyPetPosition();
+    await invoke('set_window_mode', { mode: 'cat' });
+    await applyCatPosition();
   } else {
     petStore.windowMode = WindowMode.Panel;
   }

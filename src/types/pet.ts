@@ -14,7 +14,6 @@ export enum CatTransientAnim {
 export enum WindowMode {
   Panel = 'panel',
   Cat = 'cat',
-  Island = 'island',
 }
 
 export interface CatState {

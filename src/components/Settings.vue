@@ -281,6 +281,8 @@
         <p v-if="logs.length === 0" class="py-2 font-mono text-[11px] text-[color:var(--text-tertiary)]">暂无日志</p>
       </div>
     </div>
+
+    <AboutSection />
   </section>
 </template>
 
@@ -288,6 +290,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { onMounted, reactive, ref, watch } from 'vue';
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
+import AboutSection from './AboutSection.vue';
 import { clearLogs, formatLogLine, logs } from '../utils/logger';
 import { setThemePreference, useThemeState, type ThemePreference } from '../utils/theme';
 

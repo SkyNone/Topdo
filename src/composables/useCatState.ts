@@ -65,6 +65,7 @@ export function useCatState() {
   const taskStore = useTaskStore();
   const petStore = usePetStore();
   const transientAnim = ref<CatTransientAnim>(CatTransientAnim.None);
+  const showCelebration = ref(false);
   let transientTimer: ReturnType<typeof setTimeout> | null = null;
 
   function playTransient(anim: CatTransientAnim, durationMs: number) {
@@ -97,6 +98,17 @@ export function useCatState() {
 
   const catLevel = computed(() => maxLevel(milestoneLevel.value, persistedLevel.value));
   const sprite = computed(() => mapSprite(catLevel.value));
+
+  watch(catLevel, (newLevel, oldLevel) => {
+    if (newLevel === CatLevel.Crowned && oldLevel !== CatLevel.Crowned) {
+      const today = new Date().toDateString();
+      const last = localStorage.getItem('topdo_last_celebration');
+      if (last !== today) {
+        showCelebration.value = true;
+        localStorage.setItem('topdo_last_celebration', today);
+      }
+    }
+  });
 
   watch([todayKey, milestoneLevel], ([nextDate, nextLevel]) => {
     const storedLevel = petStore.dailyProgressDate === nextDate ? petStore.dailyProgressLevel : CatLevel.Sleeping;
@@ -139,6 +151,10 @@ export function useCatState() {
     sprite: sprite.value,
   }));
 
+  function closeCelebration() {
+    showCelebration.value = false;
+  }
+
   return {
     catState,
     catLevel,
@@ -147,5 +163,7 @@ export function useCatState() {
     doneTasks,
     remainingTasks,
     sprite,
+    showCelebration,
+    closeCelebration,
   };
 }

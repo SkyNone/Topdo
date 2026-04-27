@@ -119,13 +119,13 @@
             <h4 class="text-sm font-semibold text-[color:var(--text-primary)]">Step ① 创建任务表格</h4>
             <span v-if="stepState.templateReady" class="text-xs font-semibold text-[color:var(--status-done)]">✅ 已完成</span>
           </div>
-          <p class="mt-2 text-xs text-[color:var(--text-secondary)]">如果你还没有多维表格，先复制 Topdo 模板链接到浏览器打开并创建自己的文档。</p>
+          <p class="mt-2 text-xs text-[color:var(--text-secondary)]">如果你还没有多维表格，可直接打开 Topdo 模板链接并创建自己的文档。</p>
           <button
             type="button"
             class="mt-3 rounded-[8px] border border-[color:var(--primary)] bg-[color:var(--bg-solid)] px-3 py-1.5 text-xs font-medium text-[color:var(--primary)] transition-colors hover:bg-[color:var(--primary-light)]"
-            @click="onCopyTemplateLink"
+            @click="onOpenTemplateLink"
           >
-            📋 获取 Topdo 模板
+            🔗 打开 Topdo 模板
           </button>
           <p class="mt-2 text-xs text-[color:var(--text-secondary)]">已有表格？可直接进入下一步。</p>
         </div>
@@ -214,19 +214,28 @@
               <button
                 type="button"
                 class="rounded-[6px] border border-[color:var(--primary)] bg-[color:var(--bg-solid)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--primary)] transition-colors hover:bg-[color:var(--primary-light)]"
-                @click="onCopyTutorialLink"
+                @click="onOpenTutorialLink"
               >
-                📖 复制教程链接（浏览器打开）
+                📖 打开教程
               </button>
               <span v-if="stepState.tutorialCopied" class="text-[11px] font-semibold text-[color:var(--status-done)]">
-                ✅ 已复制，请到浏览器粘贴打开
+                ✅ 已在浏览器打开
               </span>
             </div>
-            <p class="mt-2 text-[11px] text-[color:var(--text-secondary)]">操作步骤：复制链接 → 打开浏览器 → 地址栏粘贴并回车</p>
+            <p class="mt-2 text-[11px] text-[color:var(--text-secondary)]">点击按钮后会直接用默认浏览器打开教程。</p>
           </div>
         </div>
       </div>
     </template>
+
+    <div class="mt-4 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
+      <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">关于 / 反馈</h3>
+      <p class="mt-1 text-[11px] text-[color:var(--text-secondary)]">遇到问题或想提建议，可直接打开 GitHub 查看项目或提交反馈。</p>
+      <div class="mt-3 grid grid-cols-2 gap-2">
+        <button type="button" class="action-btn px-3 py-2" @click="onOpenGitHub">GitHub 主页</button>
+        <button type="button" class="action-btn px-3 py-2" @click="onOpenFeedback">反馈地址</button>
+      </div>
+    </div>
 
     <p
       v-if="statusMessage"
@@ -286,8 +295,11 @@
 
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-shell';
 import { onMounted, reactive, ref, watch } from 'vue';
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
+import { usePetStore } from '../stores/petStore';
+import { WindowMode } from '../types/pet';
 import { clearLogs, formatLogLine, logs } from '../utils/logger';
 import { setThemePreference, useThemeState, type ThemePreference } from '../utils/theme';
 
@@ -339,11 +351,15 @@ interface PetSettingsPayload {
   window_mode: string;
 }
 
+const GITHUB_REPO_URL = 'https://github.com/SkyNone/Topdo';
+const GITHUB_FEEDBACK_URL = 'https://github.com/SkyNone/Topdo/issues';
+
 const emit = defineEmits<{
   (event: 'back'): void;
   (event: 'saved', mode: AppMode): void;
 }>();
 
+const petStore = usePetStore();
 const selectedMode = ref<AppMode>('local');
 const initialMode = ref<AppMode>('local');
 const busy = ref(false);
@@ -549,33 +565,33 @@ function parseBitableUrl(silentOnBlur: boolean) {
   setStatus('success', '✅ 已识别 App Token 和 Table ID');
 }
 
-async function copyTemplateLink() {
+async function openTemplateLink() {
   try {
-    await navigator.clipboard.writeText(FEISHU_TEMPLATE_URL);
+    await open(FEISHU_TEMPLATE_URL);
     stepState.templateReady = true;
-    setStatus('success', '模板链接已复制，请粘贴到浏览器打开并创建自己的文档');
-  } catch {
-    setStatus('error', '复制模板链接失败');
+    setStatus('success', '已在浏览器打开 Topdo 模板');
+  } catch (error) {
+    setStatus('error', `打开模板失败: ${String(error)}`);
   }
 }
 
-function onCopyTemplateLink() {
-  void copyTemplateLink();
+function onOpenTemplateLink() {
+  void openTemplateLink();
 }
 
-async function copyTutorialLink() {
+async function openTutorialLink() {
   try {
-    await navigator.clipboard.writeText(FEISHU_TUTORIAL_URL);
+    await open(FEISHU_TUTORIAL_URL);
     stepState.tutorialCopied = true;
-    setStatus('success', '教程链接已复制，请到浏览器地址栏粘贴打开');
-  } catch {
+    setStatus('success', '已在浏览器打开教程');
+  } catch (error) {
     stepState.tutorialCopied = false;
-    setStatus('error', '复制教程链接失败');
+    setStatus('error', `打开教程失败: ${String(error)}`);
   }
 }
 
-function onCopyTutorialLink() {
-  void copyTutorialLink();
+function onOpenTutorialLink() {
+  void openTutorialLink();
 }
 
 async function loadConfig() {
@@ -616,6 +632,7 @@ async function onSave() {
   busy.value = true;
   try {
     console.log('[Settings] 保存模式:', selectedMode.value);
+    const effectiveWindowMode = petEnabled.value ? petWindowMode.value : WindowMode.Panel;
 
     const saveResult = await invoke('save_config', buildSaveConfigParams());
     console.log('[Settings] save_config 返回:', saveResult);
@@ -632,8 +649,15 @@ async function onSave() {
       cat_x: petPosition.value.x,
       catY: petPosition.value.y,
       cat_y: petPosition.value.y,
-      windowMode: petWindowMode.value,
-      window_mode: petWindowMode.value,
+      windowMode: effectiveWindowMode,
+      window_mode: effectiveWindowMode,
+    });
+    await petStore.save({
+      enabled: petEnabled.value,
+      showBadge: petShowBadge.value,
+      animations: petAnimations.value,
+      catPosition: { ...petPosition.value },
+      windowMode: effectiveWindowMode === WindowMode.Cat ? WindowMode.Cat : WindowMode.Panel
     });
 
     const verifiedMode = await invoke<string>('get_app_mode');
@@ -703,6 +727,22 @@ async function onCopyErrorDetail() {
     }, 1500);
   } catch (error) {
     setStatus('error', `复制失败: ${String(error)}`);
+  }
+}
+
+async function onOpenGitHub() {
+  try {
+    await open(GITHUB_REPO_URL);
+  } catch (error) {
+    setStatus('error', `打开 GitHub 失败: ${String(error)}`);
+  }
+}
+
+async function onOpenFeedback() {
+  try {
+    await open(GITHUB_FEEDBACK_URL);
+  } catch (error) {
+    setStatus('error', `打开反馈地址失败: ${String(error)}`);
   }
 }
 

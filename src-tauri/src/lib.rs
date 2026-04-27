@@ -26,8 +26,10 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 const MAIN_WINDOW_LABEL: &str = "main";
 const NORMAL_WIDTH: f64 = 320.0;
 const NORMAL_HEIGHT: f64 = 500.0;
-const MINI_WIDTH: f64 = 80.0;
-const MINI_HEIGHT: f64 = 80.0;
+const MINI_PET_WIDTH: f64 = 80.0;
+const MINI_PET_HEIGHT: f64 = 80.0;
+const MINI_PILL_WIDTH: f64 = 176.0;
+const MINI_PILL_HEIGHT: f64 = 44.0;
 const CONFIG_FILE_NAME: &str = "config.json";
 const DB_FILE_NAME: &str = "tasks.db";
 const TASK_ORDER_FILE_NAME: &str = "task_order.json";
@@ -55,7 +57,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     id TEXT,
     name TEXT NOT NULL,
     status TEXT DEFAULT '待处理',
-    priority TEXT DEFAULT '🔴今日必做',
+    priority TEXT DEFAULT '普通',
     task_type TEXT DEFAULT '日常事务',
     time_spent TEXT DEFAULT '',
     created_at TEXT DEFAULT '',
@@ -462,7 +464,7 @@ fn normalize_task(mut task: Task) -> Task {
     task.status = "待处理".to_string();
   }
   if task.priority.trim().is_empty() {
-    task.priority = "🔴今日必做".to_string();
+    task.priority = "普通".to_string();
   }
   if task.task_type.trim().is_empty() {
     task.task_type = "日常事务".to_string();
@@ -480,6 +482,20 @@ fn normalize_task(mut task: Task) -> Task {
     task.last_retry_at = String::new();
   }
   task
+}
+
+fn to_feishu_priority_value(priority: &str) -> String {
+  match priority.trim() {
+    "紧急" | "今日必做" | "🔴今日必做" | "🔴 今日必做" => "今日必做".to_string(),
+    "重要" | "本周完成" | "🟡本周完成" | "🟠本周完成" | "🔵本周完成" | "🟡尽快完成" | "🟡重要不紧急" => {
+      "本周完成".to_string()
+    }
+    "普通" | "自由安排" | "⚪️自由安排" | "⚪自由安排" | "🔵有空再说" | "🔵常规任务" => {
+      "自由安排".to_string()
+    }
+    "" => "自由安排".to_string(),
+    other => other.to_string(),
+  }
 }
 
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
@@ -624,8 +640,15 @@ fn apply_normal_mode(window: &WebviewWindow) -> tauri::Result<()> {
   Ok(())
 }
 
-fn apply_mini_mode(window: &WebviewWindow) -> tauri::Result<()> {
-  let mini_size = Size::Logical(LogicalSize::new(MINI_WIDTH, MINI_HEIGHT));
+fn apply_mini_mode(app: &AppHandle, window: &WebviewWindow) -> tauri::Result<()> {
+  let pet_enabled = load_app_config_from_file(app)
+    .map(|cfg| cfg.pet.enabled)
+    .unwrap_or(true);
+  let mini_size = if pet_enabled {
+    Size::Logical(LogicalSize::new(MINI_PET_WIDTH, MINI_PET_HEIGHT))
+  } else {
+    Size::Logical(LogicalSize::new(MINI_PILL_WIDTH, MINI_PILL_HEIGHT))
+  };
   window.set_resizable(false)?;
   window.set_min_size(Some(mini_size))?;
   window.set_max_size(Some(mini_size))?;
@@ -1383,7 +1406,7 @@ async fn feishu_create_record(app: &AppHandle, task: &Task) -> Result<String, St
         "fields": {
           "任务名称": task.name,
           "状态": task.status,
-          "优先级": task.priority,
+          "优先级": to_feishu_priority_value(&task.priority),
           "类型": task.task_type,
           "备注/收获": task.notes
         }
@@ -1914,7 +1937,7 @@ async fn create_local_task(
     name: task_name,
     status: "待处理".to_string(),
     priority: if priority.trim().is_empty() {
-      "🔴今日必做".to_string()
+      "普通".to_string()
     } else {
       priority
     },
@@ -2221,7 +2244,7 @@ fn set_window_mode_internal(app: &AppHandle, mode: &str) -> Result<(), String> {
     .map_err(|_| "failed to lock ui state".to_string())?;
 
   if normalized_mode == "cat" {
-    apply_mini_mode(&window).map_err(|err| err.to_string())?;
+    apply_mini_mode(app, &window).map_err(|err| err.to_string())?;
     state.mini_mode = true;
   } else {
     apply_normal_mode(&window).map_err(|err| err.to_string())?;
@@ -3013,7 +3036,12 @@ async fn update_task(
   )
   .await?;
 
-  let fields = json!({ field_name.trim(): value });
+  let remote_value = if field_name.trim() == "优先级" {
+    to_feishu_priority_value(&value)
+  } else {
+    value.clone()
+  };
+  let fields = json!({ field_name.trim(): remote_value });
   match feishu_update_record_fields(&app, record_id.trim(), fields).await {
     Ok(_) => {
       db_mark_synced(app, record_id).await?;
@@ -3051,7 +3079,7 @@ async fn create_task(
     record_id: local_id.clone(),
     name: task_name,
     status: "待处理".to_string(),
-    priority: "🔴今日必做".to_string(),
+    priority: "普通".to_string(),
     task_type: "日常事务".to_string(),
     time_spent: String::new(),
     created_at: now_iso(),
@@ -3158,7 +3186,7 @@ async fn sync_tasks(
     let fields = json!({
       "任务名称": task.name,
       "状态": task.status,
-      "优先级": task.priority,
+      "优先级": to_feishu_priority_value(&task.priority),
       "类型": task.task_type,
       "实际耗时(分钟)": task.time_spent,
       "任务创建时间": task.created_at,
@@ -3189,6 +3217,7 @@ pub fn run() {
       tauri_plugin_autostart::MacosLauncher::LaunchAgent,
       None,
     ))
+    .plugin(tauri_plugin_shell::init())
     .manage(Mutex::new(UiState {
       mini_mode: false,
       always_on_top: true,

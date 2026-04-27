@@ -7,14 +7,21 @@
         :class="{ pressed: miniPressed, dragging: miniDragging }"
         @mousedown="onMiniMouseDown"
       >
-        <CatPet :show-badge="petStore.showBadge" :animations="petStore.animations" />
+        <CatPet v-if="showMiniPet" :show-badge="petStore.showBadge" :animations="petStore.animations" />
+        <button v-else type="button" class="mini-pill" @click.stop="restoreNormalMode">
+          <span class="mini-pill__brand">Topdo</span>
+          <span class="mini-pill__meta">
+            <span class="mini-pill__count">{{ taskStore.todoCount }}</span>
+            <span class="mini-pill__label">待办</span>
+          </span>
+        </button>
       </div>
 
       <template v-else>
         <TitleBar
           :always-on-top="isAlwaysOnTop"
           :resolved-theme="resolvedTheme"
-          @settings="currentView = 'settings'"
+          @settings="toggleSettingsView"
           @toggle-pin="onTogglePin"
           @toggle-theme="onToggleTheme"
           @mini="onEnterMiniMode"
@@ -44,6 +51,19 @@
         <section v-else class="flex min-h-0 flex-1 flex-col bg-transparent">
           <div class="px-3 pt-2">
             <StatsBar @add="createInlineVisible = true" />
+          </div>
+          <div v-if="searchQueryLabel" class="px-3 pt-2">
+            <div class="search-state-bar">
+              <div class="search-state-bar__main">
+                <span class="search-state-bar__badge">搜索中</span>
+                <span class="search-state-bar__text">“{{ searchQueryLabel }}”</span>
+                <span class="search-state-bar__count">{{ searchResultCount }} 个结果</span>
+              </div>
+              <div class="search-state-bar__actions">
+                <button type="button" class="search-state-bar__btn" @click="openSearch">编辑搜索</button>
+                <button type="button" class="search-state-bar__btn search-state-bar__btn--primary" @click="clearSearch">清空</button>
+              </div>
+            </div>
           </div>
           <OnboardingBar
             v-if="showOnboarding"
@@ -96,10 +116,46 @@
         @confirm="confirmDelete"
       />
 
-      <ShortcutSheet
-        v-if="shortcutSheetVisible && currentView === 'main'"
-        @close="shortcutSheetVisible = false"
-      />
+    <ShortcutSheet
+      v-if="shortcutSheetVisible && currentView === 'main' && !isMiniMode"
+      @close="shortcutSheetVisible = false"
+    />
+
+      <div
+        v-if="taskStore.searchOpen && currentView === 'main' && !isMiniMode"
+        class="search-overlay"
+        @click.self="closeSearch"
+      >
+        <div class="search-panel">
+          <div class="search-panel__header">
+            <span class="search-panel__title">搜索任务</span>
+            <div class="search-panel__actions">
+              <button
+                v-if="taskStore.searchQuery.trim()"
+                type="button"
+                class="search-panel__action-btn"
+                @click="clearSearch"
+              >
+                清空
+              </button>
+              <button type="button" class="search-panel__close" @click="closeSearch">Esc</button>
+            </div>
+          </div>
+          <input
+            ref="searchInputRef"
+            :value="taskStore.searchQuery"
+            type="text"
+            class="search-panel__input"
+            placeholder="搜索任务名称或备注"
+            @input="taskStore.setSearchQuery(($event.target as HTMLInputElement).value)"
+          />
+          <div class="search-panel__meta">
+            <span v-if="taskStore.searchQuery.trim()">{{ taskStore.filteredTasks.length }} 个结果</span>
+            <span v-else>输入后即时过滤当前列表</span>
+            <span>Cmd+F 打开，Esc 关闭</span>
+          </div>
+        </div>
+      </div>
 
       <div v-if="toast" class="pointer-events-none absolute bottom-3 left-1/2 z-40 -translate-x-1/2 rounded-[var(--radius-btn)] bg-[#212529] px-3 py-1.5 text-[var(--font-size-sm)] text-white">
         {{ toast }}
@@ -113,7 +169,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import ConfirmDialog from './components/ConfirmDialog.vue';
 import CatPet from './components/CatPet/CatPet.vue';
 import OnboardingBar from './components/OnboardingBar.vue';
@@ -160,6 +216,7 @@ const createInlineVisible = ref(false);
 const shortcutSheetVisible = ref(false);
 const miniPressed = ref(false);
 const miniDragging = ref(false);
+const searchInputRef = ref<HTMLInputElement | null>(null);
 
 let miniStartPoint: { x: number; y: number } | null = null;
 let miniMouseMoveHandler: ((event: MouseEvent) => void) | null = null;
@@ -182,6 +239,9 @@ const ONBOARDING_KEY = 'topdo_onboarding_v1_dismissed';
 const SHORTCUT_TIP_KEY = 'topdo_shortcut_tip_seen_v1';
 const onboardingPendingFromFirstLaunch = ref(false);
 const showOnboarding = ref(false);
+const showMiniPet = computed(() => isMiniMode.value && petStore.enabled);
+const searchQueryLabel = computed(() => taskStore.searchQuery.trim());
+const searchResultCount = computed(() => taskStore.filteredTasks.length);
 
 const { resolvedTheme } = useThemeState();
 const onboardingSteps = computed(() => ({
@@ -317,6 +377,7 @@ async function onTogglePin() {
 
 async function onEnterMiniMode() {
   try {
+    shortcutSheetVisible.value = false;
     await invoke('set_window_mode', { mode: 'cat' });
     isMiniMode.value = true;
     petStore.windowMode = WindowMode.Cat;
@@ -496,6 +557,27 @@ function toggleShortcutSheet() {
   shortcutSheetVisible.value = !shortcutSheetVisible.value;
 }
 
+function toggleSettingsView() {
+  currentView.value = currentView.value === 'settings' ? 'main' : 'settings';
+}
+
+function openSearch() {
+  if (currentView.value !== 'main' || isMiniMode.value) return;
+  taskStore.openSearch();
+  void nextTick(() => {
+    searchInputRef.value?.focus();
+    searchInputRef.value?.select();
+  });
+}
+
+function closeSearch() {
+  taskStore.closeSearch();
+}
+
+function clearSearch() {
+  taskStore.clearSearch();
+}
+
 function openDeleteDialog(task: Task) {
   pendingDeleteTask.value = task;
   deleteDialogVisible.value = true;
@@ -531,6 +613,11 @@ function onGlobalKeydown(event: KeyboardEvent) {
   const editable = isEditableTarget(event.target);
 
   if (event.key === 'Escape') {
+    if (taskStore.searchOpen) {
+      event.preventDefault();
+      closeSearch();
+      return;
+    }
     event.preventDefault();
     if (shortcutSheetVisible.value) {
       shortcutSheetVisible.value = false;
@@ -557,6 +644,12 @@ function onGlobalKeydown(event: KeyboardEvent) {
     event.preventDefault();
     if (currentView.value !== 'main') return;
     createInlineVisible.value = true;
+    return;
+  }
+
+  if (isMeta && !isShift && key === 'f') {
+    event.preventDefault();
+    openSearch();
     return;
   }
 
@@ -673,11 +766,15 @@ onMounted(async () => {
   });
 
   await bootstrap();
-  if (isMiniMode.value || petStore.windowMode === WindowMode.Cat) {
+  if (petStore.enabled && (isMiniMode.value || petStore.windowMode === WindowMode.Cat)) {
     isMiniMode.value = true;
     petStore.windowMode = WindowMode.Cat;
     await applyPetPosition();
   } else {
+    if (isMiniMode.value) {
+      await restoreNormalMode();
+    }
+    isMiniMode.value = false;
     petStore.windowMode = WindowMode.Panel;
   }
   await petStore.save();
@@ -728,6 +825,26 @@ watch(
   },
   { deep: true }
 );
+
+watch(
+  () => petStore.enabled,
+  (enabled) => {
+    if (!enabled && isMiniMode.value) {
+      void restoreNormalMode();
+    }
+  }
+);
+
+watch(
+  () => taskStore.searchOpen,
+  (open) => {
+    if (!open) return;
+    void nextTick(() => {
+      searchInputRef.value?.focus();
+      searchInputRef.value?.select();
+    });
+  }
+);
 </script>
 
 <style scoped>
@@ -773,6 +890,51 @@ watch(
   user-select: none;
 }
 
+.mini-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0.5px solid var(--border-light);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-solid) 96%, transparent);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mini-pill__brand {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.mini-pill__meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.mini-pill__count {
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.mini-pill__label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 .mini-shell.pressed {
   transform: scale(0.98);
 }
@@ -786,5 +948,157 @@ watch(
   left: 8px;
   bottom: 34px;
   z-index: 30;
+}
+
+.search-state-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 0.5px solid color-mix(in srgb, var(--primary) 16%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 6%, var(--bg-solid));
+}
+
+.search-state-bar__main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.search-state-bar__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 14%, var(--bg-solid));
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.search-state-bar__text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.search-state-bar__count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.search-state-bar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.search-state-bar__btn {
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-solid);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  padding: 6px 10px;
+}
+
+.search-state-bar__btn--primary {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 22%, var(--border));
+}
+
+.search-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 56px 16px 16px;
+  background: color-mix(in srgb, var(--bg-secondary) 28%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.search-panel {
+  width: min(100%, 420px);
+  border-radius: 14px;
+  border: 0.5px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-solid) 96%, transparent);
+  box-shadow: var(--shadow-md);
+  padding: 14px;
+}
+
+.search-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.search-panel__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.search-panel__action-btn {
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 10px;
+}
+
+.search-panel__close {
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.search-panel__input {
+  width: 100%;
+  border-radius: 10px;
+  border: 0.5px solid var(--border-light);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.search-panel__input:focus {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+
+.search-panel__meta {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 </style>

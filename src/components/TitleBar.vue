@@ -10,21 +10,22 @@
       data-no-drag
       @mouseenter="trafficHover = true"
       @mouseleave="trafficHover = false"
+      @dblclick.stop
     >
-      <button class="traffic-btn close" type="button" title="关闭到托盘" @click="$emit('close-to-tray')">
+      <button class="traffic-btn close" type="button" title="关闭到托盘" @click.stop="$emit('close-to-tray')" @dblclick.stop>
         <svg v-if="trafficHover" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
           <line x1="3" y1="3" x2="9" y2="9" stroke="rgba(0,0,0,0.5)" stroke-width="1.2" stroke-linecap="round" />
           <line x1="9" y1="3" x2="3" y2="9" stroke="rgba(0,0,0,0.5)" stroke-width="1.2" stroke-linecap="round" />
         </svg>
       </button>
 
-      <button class="traffic-btn minimize" type="button" title="迷你模式" @click="$emit('mini')">
+      <button class="traffic-btn minimize" type="button" title="迷你模式" @click.stop="$emit('mini')" @dblclick.stop>
         <svg v-if="trafficHover" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
           <line x1="2.5" y1="6" x2="9.5" y2="6" stroke="rgba(0,0,0,0.5)" stroke-width="1.2" stroke-linecap="round" />
         </svg>
       </button>
 
-      <button class="traffic-btn maximize" type="button" title="窗口控制" @click="handleGreen">
+      <button class="traffic-btn maximize" type="button" title="窗口控制" @click.stop="handleGreen" @dblclick.stop>
         <svg v-if="trafficHover" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
           <circle cx="6" cy="6" r="3.5" stroke="rgba(0,0,0,0.5)" stroke-width="1.1" fill="none" />
         </svg>
@@ -33,12 +34,13 @@
 
     <div data-tauri-drag-region class="title-text">Topdo</div>
 
-    <div class="titlebar-actions" data-no-drag>
+    <div class="titlebar-actions" data-no-drag @dblclick.stop>
       <button
         class="titlebar-action"
         type="button"
         :title="isDarkMode ? '切换到浅色模式' : '切换到深色模式'"
-        @click="toggleTheme"
+        @click.stop="toggleTheme"
+        @dblclick.stop
       >
         <svg v-if="!isDarkMode" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path d="M13.5 9.2A5.5 5.5 0 0 1 6.8 2.5a6 6 0 1 0 6.7 6.7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -61,7 +63,8 @@
         :class="{ active: isPinned }"
         type="button"
         :title="isPinned ? '取消置顶' : '窗口置顶'"
-        @click="togglePin"
+        @click.stop="togglePin"
+        @dblclick.stop
       >
         <svg v-if="!isPinned" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path d="M9.85 1.85L14.15 6.15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -76,7 +79,7 @@
         </svg>
       </button>
 
-      <button class="titlebar-action" type="button" title="设置" @click="openSettings">
+      <button class="titlebar-action" type="button" title="设置" @click.stop="openSettings" @dblclick.stop>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path d="M6.86 2h2.28l.32 1.91a4.5 4.5 0 0 1 1.32.77L12.6 4l1.14 1.97-1.5 1.22c.06.27.1.54.1.81s-.04.54-.1.81l1.5 1.22L12.6 12l-1.82-.68a4.5 4.5 0 0 1-1.32.77L9.14 14H6.86l-.32-1.91a4.5 4.5 0 0 1-1.32-.77L3.4 12 2.26 10.03l1.5-1.22A4.5 4.5 0 0 1 3.66 8c0-.27.04-.54.1-.81l-1.5-1.22L3.4 4l1.82.68a4.5 4.5 0 0 1 1.32-.77L6.86 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
           <circle cx="8" cy="8" r="1.75" stroke="currentColor" stroke-width="1.5"/>

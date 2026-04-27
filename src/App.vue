@@ -1,24 +1,27 @@
 <template>
   <main class="h-full w-full bg-transparent text-[color:var(--text-primary)]">
-    <section class="app-container relative mx-auto flex h-full w-full flex-col">
+    <section class="app-container relative mx-auto flex h-full w-full flex-col" :class="{ 'app-container-mini': isMiniMode }">
       <div
         v-if="isMiniMode"
         class="mini-shell"
         :class="{ pressed: miniPressed, dragging: miniDragging }"
         @mousedown="onMiniMouseDown"
       >
-        <span class="mini-dot" aria-hidden="true"></span>
-        <div class="mini-content">
-          <span class="mini-count">{{ taskStore.todoCount }}</span>
-          <span class="mini-label">待办</span>
-        </div>
+        <CatPet v-if="showMiniPet" :show-badge="petStore.showBadge" :animations="petStore.animations" />
+        <button v-else type="button" class="mini-pill" @click.stop="restoreNormalMode">
+          <span class="mini-pill__brand">Topdo</span>
+          <span class="mini-pill__meta">
+            <span class="mini-pill__count">{{ taskStore.todoCount }}</span>
+            <span class="mini-pill__label">待办</span>
+          </span>
+        </button>
       </div>
 
       <template v-else>
         <TitleBar
           :always-on-top="isAlwaysOnTop"
           :resolved-theme="resolvedTheme"
-          @settings="currentView = 'settings'"
+          @settings="toggleSettingsView"
           @toggle-pin="onTogglePin"
           @toggle-theme="onToggleTheme"
           @mini="onEnterMiniMode"
@@ -49,6 +52,19 @@
           <div class="px-3 pt-2">
             <StatsBar @add="createInlineVisible = true" />
           </div>
+          <div v-if="searchQueryLabel" class="px-3 pt-2">
+            <div class="search-state-bar">
+              <div class="search-state-bar__main">
+                <span class="search-state-bar__badge">搜索中</span>
+                <span class="search-state-bar__text">“{{ searchQueryLabel }}”</span>
+                <span class="search-state-bar__count">{{ searchResultCount }} 个结果</span>
+              </div>
+              <div class="search-state-bar__actions">
+                <button type="button" class="search-state-bar__btn" @click="openSearch">编辑搜索</button>
+                <button type="button" class="search-state-bar__btn search-state-bar__btn--primary" @click="clearSearch">清空</button>
+              </div>
+            </div>
+          </div>
           <OnboardingBar
             v-if="showOnboarding"
             :steps="onboardingSteps"
@@ -65,6 +81,14 @@
             @created="createInlineVisible = false"
             @error="showError"
             @request-delete="openDeleteDialog"
+          />
+
+          <PanelCatCorner
+            v-if="petStore.enabled"
+            class="panel-corner"
+            :show-badge="petStore.showBadge"
+            :animations="petStore.animations"
+            @collapse="onEnterMiniMode"
           />
 
           <StatusBar
@@ -92,10 +116,46 @@
         @confirm="confirmDelete"
       />
 
-      <ShortcutSheet
-        v-if="shortcutSheetVisible && currentView === 'main'"
-        @close="shortcutSheetVisible = false"
-      />
+    <ShortcutSheet
+      v-if="shortcutSheetVisible && currentView === 'main' && !isMiniMode"
+      @close="shortcutSheetVisible = false"
+    />
+
+      <div
+        v-if="taskStore.searchOpen && currentView === 'main' && !isMiniMode"
+        class="search-overlay"
+        @click.self="closeSearch"
+      >
+        <div class="search-panel">
+          <div class="search-panel__header">
+            <span class="search-panel__title">搜索任务</span>
+            <div class="search-panel__actions">
+              <button
+                v-if="taskStore.searchQuery.trim()"
+                type="button"
+                class="search-panel__action-btn"
+                @click="clearSearch"
+              >
+                清空
+              </button>
+              <button type="button" class="search-panel__close" @click="closeSearch">Esc</button>
+            </div>
+          </div>
+          <input
+            ref="searchInputRef"
+            :value="taskStore.searchQuery"
+            type="text"
+            class="search-panel__input"
+            placeholder="搜索任务名称或备注"
+            @input="taskStore.setSearchQuery(($event.target as HTMLInputElement).value)"
+          />
+          <div class="search-panel__meta">
+            <span v-if="taskStore.searchQuery.trim()">{{ taskStore.filteredTasks.length }} 个结果</span>
+            <span v-else>输入后即时过滤当前列表</span>
+            <span>Cmd+F 打开，Esc 关闭</span>
+          </div>
+        </div>
+      </div>
 
       <div v-if="toast" class="pointer-events-none absolute bottom-3 left-1/2 z-40 -translate-x-1/2 rounded-[var(--radius-btn)] bg-[#212529] px-3 py-1.5 text-[var(--font-size-sm)] text-white">
         {{ toast }}
@@ -106,11 +166,14 @@
 
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
-import { LogicalSize } from '@tauri-apps/api/dpi';
+import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import ConfirmDialog from './components/ConfirmDialog.vue';
+import CatPet from './components/CatPet/CatPet.vue';
 import OnboardingBar from './components/OnboardingBar.vue';
+import PanelCatCorner from './components/PanelCatCorner.vue';
 import Settings from './components/Settings.vue';
 import ShortcutSheet from './components/ShortcutSheet.vue';
 import StatsBar from './components/StatsBar.vue';
@@ -118,9 +181,11 @@ import StatusBar from './components/StatusBar.vue';
 import TaskList from './components/TaskList.vue';
 import TitleBar from './components/TitleBar.vue';
 import Welcome from './components/Welcome.vue';
+import { usePetStore } from './stores/petStore';
 import { useTaskStore } from './stores/taskStore';
 import type { TaskFilter } from './stores/taskStore';
 import type { Task } from './types';
+import { WindowMode } from './types/pet';
 import { initializeTheme, toggleThemeQuickly, useThemeState } from './utils/theme';
 
 type ViewType = 'welcome' | 'main' | 'settings';
@@ -135,7 +200,13 @@ interface WindowSizePayload {
   height: number;
 }
 
+interface WindowModeChangedPayload {
+  mode: 'panel' | 'cat';
+  mini_mode: boolean;
+}
+
 const taskStore = useTaskStore();
+const petStore = usePetStore();
 const appWindow = getCurrentWindow();
 
 const currentView = ref<ViewType>('main');
@@ -145,6 +216,7 @@ const createInlineVisible = ref(false);
 const shortcutSheetVisible = ref(false);
 const miniPressed = ref(false);
 const miniDragging = ref(false);
+const searchInputRef = ref<HTMLInputElement | null>(null);
 
 let miniStartPoint: { x: number; y: number } | null = null;
 let miniMouseMoveHandler: ((event: MouseEvent) => void) | null = null;
@@ -154,6 +226,9 @@ const toast = ref('');
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let unlistenResized: (() => void) | null = null;
+let unlistenWindowModeChanged: UnlistenFn | null = null;
+let unlistenFocusChanged: (() => void) | null = null;
+let initialTraitsRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 const deleteDialogVisible = ref(false);
 const pendingDeleteTask = ref<Task | null>(null);
@@ -164,6 +239,9 @@ const ONBOARDING_KEY = 'topdo_onboarding_v1_dismissed';
 const SHORTCUT_TIP_KEY = 'topdo_shortcut_tip_seen_v1';
 const onboardingPendingFromFirstLaunch = ref(false);
 const showOnboarding = ref(false);
+const showMiniPet = computed(() => isMiniMode.value && petStore.enabled);
+const searchQueryLabel = computed(() => taskStore.searchQuery.trim());
+const searchResultCount = computed(() => taskStore.filteredTasks.length);
 
 const { resolvedTheme } = useThemeState();
 const onboardingSteps = computed(() => ({
@@ -190,6 +268,45 @@ async function syncWindowState() {
     const state = await invoke<WindowStatePayload>('get_window_state');
     isMiniMode.value = state.mini_mode;
     isAlwaysOnTop.value = state.always_on_top;
+  } catch {
+    // ignore
+  }
+}
+
+async function reapplyWindowTraits() {
+  try {
+    await invoke('reapply_window_traits');
+  } catch {
+    // ignore
+  }
+}
+
+async function ensureInitialWindowTraitsApplied() {
+  try {
+    await invoke('reapply_window_traits');
+  } catch (error) {
+    console.warn('首次应用窗口 traits 失败，准备重试:', error);
+    if (initialTraitsRetryTimer) {
+      clearTimeout(initialTraitsRetryTimer);
+    }
+    initialTraitsRetryTimer = setTimeout(() => {
+      void reapplyWindowTraits().then(() => reconcileWindowMode());
+    }, 450);
+  }
+}
+
+async function reconcileWindowMode() {
+  try {
+    const state = await invoke<WindowStatePayload>('get_window_state');
+    isMiniMode.value = state.mini_mode;
+    const mode = state.mini_mode ? WindowMode.Cat : WindowMode.Panel;
+    if (petStore.windowMode !== mode) {
+      petStore.windowMode = mode;
+      await petStore.save();
+    }
+    if (state.mini_mode) {
+      await applyPetPosition();
+    }
   } catch {
     // ignore
   }
@@ -260,9 +377,12 @@ async function onTogglePin() {
 
 async function onEnterMiniMode() {
   try {
-    await invoke('enter_mini_mode');
+    shortcutSheetVisible.value = false;
+    await invoke('set_window_mode', { mode: 'cat' });
     isMiniMode.value = true;
-    isAlwaysOnTop.value = true;
+    petStore.windowMode = WindowMode.Cat;
+    await petStore.save();
+    await applyPetPosition();
   } catch (error) {
     showError(String(error));
   }
@@ -270,10 +390,36 @@ async function onEnterMiniMode() {
 
 async function restoreNormalMode() {
   try {
-    await invoke('restore_normal_mode');
+    await invoke('set_window_mode', { mode: 'panel' });
     isMiniMode.value = false;
+    petStore.windowMode = WindowMode.Panel;
+    await petStore.save();
   } catch (error) {
     showError(String(error));
+  }
+}
+
+async function persistPetPosition() {
+  try {
+    const position = await appWindow.outerPosition();
+    petStore.catPosition = {
+      x: Number(position.x ?? 0),
+      y: Number(position.y ?? 0),
+    };
+    await petStore.save();
+  } catch {
+    // ignore position persistence failure
+  }
+}
+
+async function applyPetPosition() {
+  const x = Number(petStore.catPosition.x ?? 0);
+  const y = Number(petStore.catPosition.y ?? 0);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || (x === 0 && y === 0)) return;
+  try {
+    await appWindow.setPosition(new PhysicalPosition(x, y));
+  } catch {
+    // ignore invalid saved position
   }
 }
 
@@ -312,6 +458,8 @@ function onMiniMouseDown(event: MouseEvent) {
     miniStartPoint = null;
     if (shouldRestore) {
       void restoreNormalMode();
+    } else {
+      void persistPetPosition();
     }
     window.setTimeout(() => {
       miniPressed.value = false;
@@ -349,8 +497,11 @@ async function onManualSync() {
 }
 
 function onVisibilityChange() {
-  if (document.visibilityState === 'visible' && taskStore.mode === 'feishu' && currentView.value === 'main') {
-    void taskStore.triggerSync().catch((error) => showError(String(error)));
+  if (document.visibilityState === 'visible') {
+    void reapplyWindowTraits().then(() => reconcileWindowMode());
+    if (taskStore.mode === 'feishu' && currentView.value === 'main') {
+      void taskStore.triggerSync().catch((error) => showError(String(error)));
+    }
   }
 }
 
@@ -406,6 +557,27 @@ function toggleShortcutSheet() {
   shortcutSheetVisible.value = !shortcutSheetVisible.value;
 }
 
+function toggleSettingsView() {
+  currentView.value = currentView.value === 'settings' ? 'main' : 'settings';
+}
+
+function openSearch() {
+  if (currentView.value !== 'main' || isMiniMode.value) return;
+  taskStore.openSearch();
+  void nextTick(() => {
+    searchInputRef.value?.focus();
+    searchInputRef.value?.select();
+  });
+}
+
+function closeSearch() {
+  taskStore.closeSearch();
+}
+
+function clearSearch() {
+  taskStore.clearSearch();
+}
+
 function openDeleteDialog(task: Task) {
   pendingDeleteTask.value = task;
   deleteDialogVisible.value = true;
@@ -441,6 +613,11 @@ function onGlobalKeydown(event: KeyboardEvent) {
   const editable = isEditableTarget(event.target);
 
   if (event.key === 'Escape') {
+    if (taskStore.searchOpen) {
+      event.preventDefault();
+      closeSearch();
+      return;
+    }
     event.preventDefault();
     if (shortcutSheetVisible.value) {
       shortcutSheetVisible.value = false;
@@ -467,6 +644,12 @@ function onGlobalKeydown(event: KeyboardEvent) {
     event.preventDefault();
     if (currentView.value !== 'main') return;
     createInlineVisible.value = true;
+    return;
+  }
+
+  if (isMeta && !isShift && key === 'f') {
+    event.preventDefault();
+    openSearch();
     return;
   }
 
@@ -540,7 +723,17 @@ function onGlobalKeydown(event: KeyboardEvent) {
 
 onMounted(async () => {
   initializeTheme();
+  await petStore.load().catch(() => undefined);
   await syncWindowState();
+  unlistenWindowModeChanged = await listen<WindowModeChangedPayload>('window-mode-changed', (event) => {
+    const payload = event.payload;
+    isMiniMode.value = payload.mini_mode;
+    petStore.windowMode = payload.mode === 'cat' ? WindowMode.Cat : WindowMode.Panel;
+    void petStore.save();
+    if (payload.mode === 'cat') {
+      void applyPetPosition();
+    }
+  });
   try {
     const savedSize = await invoke<WindowSizePayload | null>('get_window_size');
     if (savedSize && savedSize.width > 0 && savedSize.height > 0) {
@@ -566,8 +759,26 @@ onMounted(async () => {
       }
     }, 500);
   });
+  unlistenFocusChanged = await appWindow.onFocusChanged(({ payload }) => {
+    if (payload) {
+      void reapplyWindowTraits().then(() => reconcileWindowMode());
+    }
+  });
 
   await bootstrap();
+  if (petStore.enabled && (isMiniMode.value || petStore.windowMode === WindowMode.Cat)) {
+    isMiniMode.value = true;
+    petStore.windowMode = WindowMode.Cat;
+    await applyPetPosition();
+  } else {
+    if (isMiniMode.value) {
+      await restoreNormalMode();
+    }
+    isMiniMode.value = false;
+    petStore.windowMode = WindowMode.Panel;
+  }
+  await petStore.save();
+  await ensureInitialWindowTraitsApplied();
   maybeShowOnboarding();
   maybeShowShortcutTip();
   document.addEventListener('visibilitychange', onVisibilityChange);
@@ -582,9 +793,21 @@ onUnmounted(() => {
     unlistenResized();
     unlistenResized = null;
   }
+  if (unlistenWindowModeChanged) {
+    unlistenWindowModeChanged();
+    unlistenWindowModeChanged = null;
+  }
+  if (unlistenFocusChanged) {
+    unlistenFocusChanged();
+    unlistenFocusChanged = null;
+  }
   if (resizeTimer) {
     clearTimeout(resizeTimer);
     resizeTimer = null;
+  }
+  if (initialTraitsRetryTimer) {
+    clearTimeout(initialTraitsRetryTimer);
+    initialTraitsRetryTimer = null;
   }
   if (toastTimer) {
     clearTimeout(toastTimer);
@@ -602,15 +825,35 @@ watch(
   },
   { deep: true }
 );
+
+watch(
+  () => petStore.enabled,
+  (enabled) => {
+    if (!enabled && isMiniMode.value) {
+      void restoreNormalMode();
+    }
+  }
+);
+
+watch(
+  () => taskStore.searchOpen,
+  (open) => {
+    if (!open) return;
+    void nextTick(() => {
+      searchInputRef.value?.focus();
+      searchInputRef.value?.select();
+    });
+  }
+);
 </script>
 
 <style scoped>
 .app-container {
   width: 100%;
   height: 100%;
-  background: var(--bg-primary);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: var(--bg-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border-radius: 12px;
   border: 0.5px solid var(--border-light);
   overflow: hidden;
@@ -621,54 +864,241 @@ watch(
     var(--shadow-sm);
 }
 
+.app-container-mini {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  overflow: visible;
+}
+
 .mini-shell {
-  margin: 2px;
-  height: calc(100% - 4px);
-  width: calc(100% - 4px);
-  border-radius: 999px;
-  border: 0.5px solid color-mix(in srgb, var(--border) 82%, transparent);
-  background: color-mix(in srgb, var(--bg-solid) 94%, transparent);
-  box-shadow: var(--shadow-sm);
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  box-shadow: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 0;
   cursor: grab;
   user-select: none;
 }
 
+.mini-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0.5px solid var(--border-light);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-solid) 96%, transparent);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mini-pill__brand {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.mini-pill__meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.mini-pill__count {
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.mini-pill__label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 .mini-shell.pressed {
-  background: color-mix(in srgb, var(--primary) 9%, var(--bg-solid));
+  transform: scale(0.98);
 }
 
 .mini-shell.dragging {
   cursor: grabbing;
 }
 
-.mini-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--status-pending);
+.panel-corner {
+  position: absolute;
+  left: 8px;
+  bottom: 34px;
+  z-index: 30;
 }
 
-.mini-content {
+.search-state-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 0.5px solid color-mix(in srgb, var(--primary) 16%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 6%, var(--bg-solid));
+}
+
+.search-state-bar__main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.search-state-bar__badge {
   display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 14%, var(--bg-solid));
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
 }
 
-.mini-count {
-  font-size: 26px;
-  line-height: 1;
-  font-weight: 700;
+.search-state-bar__text {
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
 }
 
-.mini-label {
+.search-state-bar__count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.search-state-bar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.search-state-bar__btn {
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-solid);
+  color: var(--text-secondary);
   font-size: 11px;
   line-height: 1;
+  padding: 6px 10px;
+}
+
+.search-state-bar__btn--primary {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 22%, var(--border));
+}
+
+.search-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 56px 16px 16px;
+  background: color-mix(in srgb, var(--bg-secondary) 28%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.search-panel {
+  width: min(100%, 420px);
+  border-radius: 14px;
+  border: 0.5px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-solid) 96%, transparent);
+  box-shadow: var(--shadow-md);
+  padding: 14px;
+}
+
+.search-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.search-panel__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.search-panel__action-btn {
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
   color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 10px;
+}
+
+.search-panel__close {
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.search-panel__input {
+  width: 100%;
+  border-radius: 10px;
+  border: 0.5px solid var(--border-light);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.search-panel__input:focus {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+
+.search-panel__meta {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 </style>

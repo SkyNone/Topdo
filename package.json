@@ -1,7 +1,7 @@
 {
   "name": "task-float",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-shell": "^2.3.1",
     "pinia": "^2.1.7",
     "vue": "^3.4.31"
   },

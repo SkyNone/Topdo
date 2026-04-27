@@ -58,8 +58,30 @@
         </svg>
       </button>
 
-      <button type="button" class="task-content text-left" @click="expanded = !expanded">
-        <p class="task-name" :title="task.name || '未命名任务'">{{ task.name || '未命名任务' }}</p>
+      <button
+        type="button"
+        class="task-content text-left"
+        @click="onTaskContentClick"
+        @dblclick.stop.prevent="startInlineEdit"
+      >
+        <input
+          v-if="inlineEditing"
+          ref="inlineNameInputRef"
+          v-model.trim="inlineNameDraft"
+          type="text"
+          class="task-name-inline-input"
+          placeholder="请输入任务名称"
+          @click.stop
+          @blur="commitInlineEdit"
+          @keydown.enter.prevent="commitInlineEdit"
+          @keydown.esc.prevent="cancelInlineEdit"
+        />
+        <p v-else class="task-name" :title="task.name || '未命名任务'">
+          <template v-for="(segment, index) in highlightedNameSegments" :key="`${segment.text}-${index}`">
+            <mark v-if="segment.match" class="task-name-highlight">{{ segment.text }}</mark>
+            <span v-else>{{ segment.text }}</span>
+          </template>
+        </p>
       </button>
 
       <div class="task-right">
@@ -91,11 +113,53 @@
 
     <Transition name="expand">
       <div v-if="expanded" class="mx-[10px] mt-1 rounded-[var(--radius-card)] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3 text-xs text-[color:var(--text-secondary)]">
+        <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px]">
+          <label class="block">
+            <span class="mb-1 block">任务名称</span>
+            <input
+              v-model.trim="nameDraft"
+              type="text"
+              class="task-edit-field"
+              placeholder="请输入任务名称"
+              @blur="onNameCommit"
+              @keydown.enter.prevent="onNameCommit"
+            />
+            <div class="mt-1 text-[10px] text-[color:var(--text-tertiary)]">
+              <span v-if="nameSaving">保存中</span>
+              <span v-else>回车或失焦保存</span>
+            </div>
+          </label>
+
+          <label class="block">
+            <span class="mb-1 block">重要性</span>
+            <div class="priority-options mt-1">
+              <button
+                v-for="option in priorityOptions"
+                :key="option.value"
+                type="button"
+                class="priority-btn"
+                :class="[
+                  `priority-btn--${option.tone}`,
+                  { active: priorityDraft === option.value }
+                ]"
+                @click="onPrioritySelect(option.value)"
+              >
+                <span class="priority-dot" :style="{ background: option.color }"></span>
+                {{ option.label }}
+              </button>
+            </div>
+            <div class="mt-1 text-[10px] text-[color:var(--text-tertiary)]">
+              <span v-if="prioritySaving">保存中</span>
+              <span v-else>修改后立即保存</span>
+            </div>
+          </label>
+        </div>
+
         <label class="block">
           <span class="mb-1 block">备注/收获</span>
           <textarea
             v-model="notesDraft"
-            class="min-h-20 w-full resize-y rounded-[var(--radius-btn)] border border-[color:var(--border)] bg-[color:var(--bg-secondary)] px-2.5 py-2 text-xs text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-placeholder)] focus:border-[color:var(--primary)]"
+            class="mt-1 min-h-14 w-full resize-y rounded-[var(--radius-btn)] border border-[color:var(--border)] bg-[color:var(--bg-secondary)] px-2.5 py-2 text-xs text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-placeholder)] focus:border-[color:var(--primary)]"
             @input="onNotesInput"
           ></textarea>
           <div class="mt-1 flex items-center justify-between text-[10px] text-[color:var(--text-tertiary)]">
@@ -125,7 +189,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useTaskStore } from '../stores/taskStore';
 import type { SyncState } from '../stores/taskStore';
 import type { Task } from '../types';
@@ -146,18 +210,87 @@ const emit = defineEmits<{
 
 const store = useTaskStore();
 const expanded = ref(false);
+const nameDraft = ref(props.task.name || '');
+const inlineNameDraft = ref(props.task.name || '');
+const inlineEditing = ref(false);
+const inlineNameInputRef = ref<HTMLInputElement | null>(null);
 const notesDraft = ref(props.task.notes || '');
+const priorityDraft = ref(normalizePriorityDraft(props.task.priority));
 const statusAnimating = ref(false);
 const menuVisible = ref(false);
 const menuX = ref(0);
 const menuY = ref(0);
+const nameSaving = ref(false);
+const prioritySaving = ref(false);
 let notesTimer: ReturnType<typeof setTimeout> | null = null;
+const priorityOptions = [
+  { value: '普通', label: '普通', color: '#C7C7CC', tone: 'normal' },
+  { value: '重要', label: '重要', color: '#007AFF', tone: 'important' },
+  { value: '紧急', label: '紧急', color: '#FF3B30', tone: 'urgent' }
+];
+const searchQueryTrimmed = computed(() => store.searchQuery.trim());
+
+const highlightedNameSegments = computed(() => {
+  const source = props.task.name || '未命名任务';
+  const query = searchQueryTrimmed.value;
+  if (!query) return [{ text: source, match: false }];
+
+  const lowerSource = source.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const segments: Array<{ text: string; match: boolean }> = [];
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const nextIndex = lowerSource.indexOf(lowerQuery, cursor);
+    if (nextIndex === -1) {
+      segments.push({ text: source.slice(cursor), match: false });
+      break;
+    }
+    if (nextIndex > cursor) {
+      segments.push({ text: source.slice(cursor, nextIndex), match: false });
+    }
+    segments.push({ text: source.slice(nextIndex, nextIndex + query.length), match: true });
+    cursor = nextIndex + query.length;
+  }
+
+  return segments.length ? segments : [{ text: source, match: false }];
+});
+
+function normalizePriorityDraft(priority: string | undefined): string {
+  const value = (priority || '').trim();
+  if (!value) return '普通';
+  if (['紧急', '🔴今日必做', '🔴 今日必做', '今日必做'].includes(value)) return '紧急';
+  if (['重要', '本周完成', '🟡本周完成', '🟠本周完成', '🔵本周完成', '🟡尽快完成', '🟡重要不紧急'].includes(value)) return '重要';
+  return '普通';
+}
 
 watch(
   () => props.task.notes,
   (next) => {
     if (next !== notesDraft.value) {
       notesDraft.value = next || '';
+    }
+  }
+);
+
+watch(
+  () => props.task.name,
+  (next) => {
+    if (next !== nameDraft.value) {
+      nameDraft.value = next || '';
+    }
+    if (!inlineEditing.value && next !== inlineNameDraft.value) {
+      inlineNameDraft.value = next || '';
+    }
+  }
+);
+
+watch(
+  () => props.task.priority,
+  (next) => {
+    const normalized = normalizePriorityDraft(next);
+    if (normalized !== priorityDraft.value) {
+      priorityDraft.value = normalized;
     }
   }
 );
@@ -307,6 +440,100 @@ async function onRetrySync() {
   } catch (error) {
     emit('error', `重试同步失败：${String(error)}`);
   }
+}
+
+async function onNameCommit() {
+  const trimmed = nameDraft.value.trim();
+  const current = (props.task.name || '').trim();
+  if (!trimmed) {
+    nameDraft.value = current;
+    emit('error', '任务名称不能为空');
+    return;
+  }
+  if (trimmed === current) return;
+
+  nameSaving.value = true;
+  try {
+    await store.updateTaskName(props.task.record_id, trimmed);
+  } catch (error) {
+    nameDraft.value = current;
+    emit('error', `任务名称保存失败：${String(error)}`);
+  } finally {
+    nameSaving.value = false;
+  }
+}
+
+function onTaskContentClick() {
+  if (inlineEditing.value) return;
+  expanded.value = !expanded.value;
+}
+
+function startInlineEdit() {
+  if (nameSaving.value) return;
+  inlineNameDraft.value = props.task.name || '';
+  inlineEditing.value = true;
+  void nextTick(() => {
+    inlineNameInputRef.value?.focus();
+    inlineNameInputRef.value?.select();
+  });
+}
+
+function cancelInlineEdit() {
+  inlineNameDraft.value = props.task.name || '';
+  inlineEditing.value = false;
+}
+
+async function commitInlineEdit() {
+  const trimmed = inlineNameDraft.value.trim();
+  const current = (props.task.name || '').trim();
+
+  if (!trimmed) {
+    inlineNameDraft.value = current;
+    inlineEditing.value = false;
+    emit('error', '任务名称不能为空');
+    return;
+  }
+
+  if (trimmed === current) {
+    inlineEditing.value = false;
+    return;
+  }
+
+  nameSaving.value = true;
+  try {
+    await store.updateTaskName(props.task.record_id, trimmed);
+    inlineNameDraft.value = trimmed;
+    nameDraft.value = trimmed;
+    inlineEditing.value = false;
+  } catch (error) {
+    inlineNameDraft.value = current;
+    inlineEditing.value = false;
+    emit('error', `任务名称保存失败：${String(error)}`);
+  } finally {
+    nameSaving.value = false;
+  }
+}
+
+async function onPriorityCommit() {
+  const next = (priorityDraft.value || '普通').trim() || '普通';
+  const current = normalizePriorityDraft(props.task.priority);
+  if (next === current) return;
+
+  prioritySaving.value = true;
+  try {
+    await store.updateTaskPriority(props.task.record_id, next);
+  } catch (error) {
+    priorityDraft.value = current;
+    emit('error', `重要性保存失败：${String(error)}`);
+  } finally {
+    prioritySaving.value = false;
+  }
+}
+
+function onPrioritySelect(priority: string) {
+  if (prioritySaving.value || priorityDraft.value === priority) return;
+  priorityDraft.value = priority;
+  void onPriorityCommit();
 }
 
 function onNotesInput() {
@@ -507,6 +734,92 @@ defineExpose({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.task-name-highlight {
+  padding: 0 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: color-mix(in srgb, var(--primary) 76%, var(--text-primary));
+}
+
+.task-name-inline-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: 8px;
+  background: var(--bg-secondary, #f5f5f7);
+  padding: 4px 8px;
+  font-size: var(--font-size-base, 13px);
+  font-weight: 400;
+  color: var(--text-primary, #1d1d1f);
+  line-height: 1.4;
+  outline: none;
+}
+
+.task-edit-field {
+  width: 100%;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--border, #e5e5ea);
+  background: var(--bg-secondary, #f5f5f7);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-primary, #1d1d1f);
+  outline: none;
+}
+
+.task-edit-field:focus {
+  border-color: var(--primary);
+}
+
+.priority-options {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.priority-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tag);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.priority-btn:hover {
+  background: var(--bg-hover);
+  border-color: #c7c7cc;
+}
+
+.priority-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
+}
+
+.priority-btn--normal.active {
+  color: #4b5563;
+  background: #eef2f6;
+  border-color: #b7c0cc;
+}
+
+.priority-btn--important.active {
+  color: #0b63ce;
+  background: rgba(0, 122, 255, 0.12);
+  border-color: rgba(0, 122, 255, 0.28);
+}
+
+.priority-btn--urgent.active {
+  color: #d93025;
+  background: rgba(255, 59, 48, 0.12);
+  border-color: rgba(255, 59, 48, 0.24);
 }
 
 .task-right {

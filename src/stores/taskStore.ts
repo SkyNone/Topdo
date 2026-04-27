@@ -23,6 +23,8 @@ interface TaskState {
   modeReady: boolean;
   firstLaunch: boolean;
   filter: TaskFilter;
+  searchQuery: string;
+  searchOpen: boolean;
   tasks: Task[];
   loading: boolean;
   isSyncing: boolean;
@@ -66,6 +68,14 @@ function normalizeStatusLabel(status: string): string {
   return '待处理';
 }
 
+function completedAtForStatus(status: string, previousCompletedAt = ''): string {
+  const key = normalizeStatus(status);
+  if (key === 'completed') {
+    return previousCompletedAt || nowUnixSecondsString();
+  }
+  return '';
+}
+
 function mergeTask(base: Task, patch: Partial<Task>): Task {
   return {
     ...base,
@@ -106,6 +116,27 @@ function toFeishuPriority(priority: string): string {
 function normalizePriority(priority: string): string {
   const value = (priority || '').trim();
   return fromFeishuPriority(value);
+}
+
+function findTaskByRecordId(tasks: Task[], recordId: string): Task | undefined {
+  return tasks.find((task) => task.record_id === recordId || task.id === recordId);
+}
+
+function findRefreshedTaskBySnapshot(tasks: Task[], snapshot: Task): Task | undefined {
+  const byDirectId = tasks.find(
+    (task) =>
+      task.record_id === snapshot.record_id ||
+      task.id === snapshot.id ||
+      (!!snapshot.feishu_record_id && task.record_id === snapshot.feishu_record_id)
+  );
+  if (byDirectId) return byDirectId;
+
+  const sourceCreated = timestampMs(snapshot.created_at);
+  return tasks.find((task) => {
+    if (task.name !== snapshot.name) return false;
+    const delta = Math.abs(timestampMs(task.created_at) - sourceCreated);
+    return delta <= 60_000;
+  });
 }
 
 function normalizeTask(task: Task): Task {
@@ -155,12 +186,25 @@ function sortTasksByPolicy(tasks: Task[]): Task[] {
   });
 }
 
+function applySearchFilter(tasks: Task[], searchQuery: string): Task[] {
+  const query = searchQuery.trim().toLowerCase();
+  if (!query) return tasks;
+
+  return tasks.filter((task) => {
+    const name = (task.name || '').toLowerCase();
+    const notes = (task.notes || '').toLowerCase();
+    return name.includes(query) || notes.includes(query);
+  });
+}
+
 export const useTaskStore = defineStore('task', {
   state: (): TaskState => ({
     mode: 'local',
     modeReady: false,
     firstLaunch: false,
     filter: 'pending',
+    searchQuery: '',
+    searchOpen: false,
     tasks: [],
     loading: false,
     isSyncing: false,
@@ -183,18 +227,20 @@ export const useTaskStore = defineStore('task', {
     inProgressCount: (state) => state.tasks.filter((task) => normalizeStatus(task.status) === 'in_progress').length,
     completedCount: (state) => state.tasks.filter((task) => normalizeStatus(task.status) === 'completed').length,
     inProgressTasks: (state) => state.tasks.filter((task) => normalizeStatus(task.status) === 'in_progress'),
+    hasActiveSearch: (state) => state.searchQuery.trim().length > 0,
     filteredTasks: (state) => {
       const sorted = sortTasksByPolicy(state.tasks);
+      const searched = applySearchFilter(sorted, state.searchQuery);
       switch (state.filter) {
         case 'pending':
-          return sorted.filter((task) => normalizeStatus(task.status) === 'todo');
+          return searched.filter((task) => normalizeStatus(task.status) === 'todo');
         case 'in_progress':
-          return sorted.filter((task) => normalizeStatus(task.status) === 'in_progress');
+          return searched.filter((task) => normalizeStatus(task.status) === 'in_progress');
         case 'done':
-          return sorted.filter((task) => normalizeStatus(task.status) === 'completed');
+          return searched.filter((task) => normalizeStatus(task.status) === 'completed');
         case 'all':
         default:
-          return sorted;
+          return searched;
       }
     },
     groupedFilteredTasks: (state): Array<{ status: TaskStatusGroup; tasks: Task[] }> => {
@@ -206,7 +252,7 @@ export const useTaskStore = defineStore('task', {
       const includeInProgress = state.filter === 'all' || state.filter === 'in_progress';
       const includeDone = state.filter === 'all' || state.filter === 'done';
 
-      const sorted = sortTasksByPolicy(state.tasks);
+      const sorted = applySearchFilter(sortTasksByPolicy(state.tasks), state.searchQuery);
       for (const task of sorted) {
         const key = normalizeStatus(task.status);
         if (key === 'in_progress') {
@@ -237,6 +283,23 @@ export const useTaskStore = defineStore('task', {
   actions: {
     setFilter(filter: TaskFilter) {
       this.filter = filter;
+    },
+
+    setSearchQuery(query: string) {
+      this.searchQuery = query;
+    },
+
+    openSearch() {
+      this.searchOpen = true;
+    },
+
+    closeSearch() {
+      this.searchOpen = false;
+    },
+
+    clearSearch() {
+      this.searchQuery = '';
+      this.closeSearch();
     },
 
     setModeState(mode: AppMode) {
@@ -396,6 +459,7 @@ export const useTaskStore = defineStore('task', {
       const normalizedStatus = normalizeStatusLabel(toStatus);
       this.setTaskPatch(recordId, {
         status: normalizedStatus,
+        completed_at: completedAtForStatus(normalizedStatus, previous.completed_at),
         sync_status: this.mode === 'feishu' ? 'pending' : 'synced'
       });
       const current = this.tasks.find((task) => task.record_id === recordId || task.id === recordId);
@@ -593,6 +657,154 @@ export const useTaskStore = defineStore('task', {
       }
     },
 
+    async updateTaskName(recordId: string, name: string) {
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error('任务名称不能为空');
+
+      const target = findTaskByRecordId(this.tasks, recordId);
+      if (!target) throw new Error('任务不存在');
+
+      const previous = { ...target };
+      this.setTaskPatch(recordId, {
+        name: trimmed,
+        sync_status: this.mode === 'feishu' ? 'pending' : 'synced'
+      });
+
+      const tryUpdateRemoteName = async (remoteRecordId: string) => {
+        log('API', '调用飞书', {
+          url: FEISHU_UPDATE_URL,
+          method: 'PUT',
+          record_id: remoteRecordId,
+          field: '任务名称'
+        });
+
+        const result = await invoke<UpdateTaskResult>('update_task', {
+          recordId: remoteRecordId,
+          record_id: remoteRecordId,
+          fieldName: '任务名称',
+          field_name: '任务名称',
+          value: trimmed
+        });
+
+        log('API', '飞书返回', { status: result.success ? 200 : 500, data: result });
+        return result;
+      };
+
+      try {
+        if (this.mode === 'local') {
+          const updated = await invoke<Task>('update_local_task', {
+            id: target.id || target.record_id,
+            fields: { name: trimmed }
+          });
+          this.setTaskPatch(recordId, {
+            ...updated,
+            record_id: updated.record_id || recordId,
+            id: updated.id || updated.record_id || recordId,
+            sync_status: 'synced'
+          });
+          return;
+        }
+
+        let result = await tryUpdateRemoteName(target.record_id);
+
+        if (!result.success && isRecordIdNotFound(result.message || '')) {
+          await this.triggerSync();
+          const refreshed = findRefreshedTaskBySnapshot(this.tasks, target);
+          if (refreshed) {
+            result = await tryUpdateRemoteName(refreshed.record_id);
+          } else {
+            return;
+          }
+        }
+
+        if (!result.success) throw new Error(result.message || '飞书保存失败');
+
+        this.setTaskPatch(recordId, { sync_status: 'synced' });
+        this.offlineMode = false;
+        this.lastSyncTime = Date.now();
+        this.scheduleSyncAfterWrite();
+      } catch (error) {
+        this.setTaskPatch(recordId, previous);
+        log('API', '飞书报错', { error: String(error) });
+        throw error;
+      }
+    },
+
+    async updateTaskPriority(recordId: string, priority: string) {
+      const normalizedPriority = normalizePriority(priority || '普通');
+      const target = findTaskByRecordId(this.tasks, recordId);
+      if (!target) throw new Error('任务不存在');
+
+      const previous = { ...target };
+      this.setTaskPatch(recordId, {
+        priority: normalizedPriority,
+        sync_status: this.mode === 'feishu' ? 'pending' : 'synced'
+      });
+      this.tasks = sortTasksByPolicy(this.tasks);
+
+      const tryUpdateRemotePriority = async (remoteRecordId: string) => {
+        log('API', '调用飞书', {
+          url: FEISHU_UPDATE_URL,
+          method: 'PUT',
+          record_id: remoteRecordId,
+          field: '优先级'
+        });
+
+        const result = await invoke<UpdateTaskResult>('update_task', {
+          recordId: remoteRecordId,
+          record_id: remoteRecordId,
+          fieldName: '优先级',
+          field_name: '优先级',
+          value: toFeishuPriority(normalizedPriority)
+        });
+
+        log('API', '飞书返回', { status: result.success ? 200 : 500, data: result });
+        return result;
+      };
+
+      try {
+        if (this.mode === 'local') {
+          const updated = await invoke<Task>('update_local_task', {
+            id: target.id || target.record_id,
+            fields: { priority: normalizedPriority }
+          });
+          this.setTaskPatch(recordId, {
+            ...updated,
+            record_id: updated.record_id || recordId,
+            id: updated.id || updated.record_id || recordId,
+            sync_status: 'synced'
+          });
+          this.tasks = sortTasksByPolicy(this.tasks);
+          return;
+        }
+
+        let result = await tryUpdateRemotePriority(target.record_id);
+
+        if (!result.success && isRecordIdNotFound(result.message || '')) {
+          await this.triggerSync();
+          const refreshed = findRefreshedTaskBySnapshot(this.tasks, target);
+          if (refreshed) {
+            result = await tryUpdateRemotePriority(refreshed.record_id);
+          } else {
+            return;
+          }
+        }
+
+        if (!result.success) throw new Error(result.message || '飞书保存失败');
+
+        this.setTaskPatch(recordId, { sync_status: 'synced' });
+        this.tasks = sortTasksByPolicy(this.tasks);
+        this.offlineMode = false;
+        this.lastSyncTime = Date.now();
+        this.scheduleSyncAfterWrite();
+      } catch (error) {
+        this.setTaskPatch(recordId, previous);
+        this.tasks = sortTasksByPolicy(this.tasks);
+        log('API', '飞书报错', { error: String(error) });
+        throw error;
+      }
+    },
+
     async createTask(input: string | CreateTaskInput, priority = '普通', taskType = '日常事务') {
       const taskInput: CreateTaskInput =
         typeof input === 'string'
@@ -636,7 +848,7 @@ export const useTaskStore = defineStore('task', {
         record_id: tempId,
         name: trimmed,
         status: normalizedStatus,
-        priority: feishuPriority,
+        priority: normalizedPriority,
         task_type: normalizedType,
         time_spent: '',
         created_at: nowUnixSecondsString(),

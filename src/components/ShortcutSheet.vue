@@ -23,7 +23,14 @@
       </div>
 
       <div class="sheet-group">
-        <p class="group-title">筛选切换</p>
+        <p class="group-title">窗口</p>
+        <div class="row"><span>显示/隐藏 Topdo</span><kbd>{{ toggleWindowShortcut }}</kbd></div>
+        <div class="row"><span>面板 / 迷你模式切换</span><kbd>{{ toggleModeShortcut }}</kbd></div>
+      </div>
+
+      <div class="sheet-group">
+        <p class="group-title">筛选与搜索</p>
+        <div class="row"><span>搜索任务</span><kbd>⌘F</kbd></div>
         <div class="row"><span>待办</span><kbd>⌘1</kbd></div>
         <div class="row"><span>进行中</span><kbd>⌘2</kbd></div>
         <div class="row"><span>已完成</span><kbd>⌘3</kbd></div>
@@ -43,14 +50,52 @@
           </div>
         </div>
       </div>
+
+      <div class="sheet-group">
+        <p class="group-title">快速交互</p>
+        <div class="row"><span>双击任务标题</span><kbd>编辑名称</kbd></div>
+        <div class="row"><span>回车 / 失焦</span><kbd>保存名称</kbd></div>
+        <div class="row"><span>Esc</span><kbd>取消编辑</kbd></div>
+      </div>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core';
+import { onMounted, ref } from 'vue';
+
 defineEmits<{
   (event: 'close'): void;
 }>();
+
+interface ShortcutConfigPayload {
+  toggle_window: string;
+}
+
+interface ModeShortcutConfigPayload {
+  toggle_mode: string;
+}
+
+const toggleWindowShortcut = ref('Cmd+Shift+T');
+const toggleModeShortcut = ref('Alt+T');
+
+async function loadShortcutLabels() {
+  try {
+    const [windowConfig, modeConfig] = await Promise.all([
+      invoke<ShortcutConfigPayload>('get_shortcut_config'),
+      invoke<ModeShortcutConfigPayload>('get_mode_shortcut_config')
+    ]);
+    toggleWindowShortcut.value = windowConfig.toggle_window || 'Cmd+Shift+T';
+    toggleModeShortcut.value = modeConfig.toggle_mode || 'Alt+T';
+  } catch {
+    // keep defaults
+  }
+}
+
+onMounted(() => {
+  void loadShortcutLabels();
+});
 </script>
 
 <style scoped>

@@ -66,6 +66,7 @@ const emptyIcon = computed(() => {
 });
 
 const emptyText = computed(() => {
+  if (store.hasActiveSearch) return '没有匹配的任务';
   if (store.filter === 'done') return '还没有已完成的任务';
   if (store.filter === 'pending') return '待启动任务已清空';
   if (store.filter === 'in_progress') return '还没有进行中的任务';

@@ -18,6 +18,65 @@
     </div>
 
     <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
+      <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">全局唤起快捷键</h3>
+      <p class="mt-1 text-[11px] text-[color:var(--text-secondary)]">
+        用于显示/隐藏 Topdo 窗口。示例：
+        <code class="rounded bg-[color:var(--bg-secondary)] px-1">Cmd+Shift+T</code>、
+        <code class="rounded bg-[color:var(--bg-secondary)] px-1">Cmd+Alt+T</code>
+      </p>
+      <div class="mt-2 flex items-center gap-2">
+        <input
+          v-model="shortcutDraft"
+          type="text"
+          class="flex-1 rounded-[8px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] px-3 py-2 text-sm text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-tertiary)] focus:border-[color:var(--primary)] focus:ring-2 focus:ring-[color:var(--primary-light)]"
+          placeholder="Cmd+Shift+T"
+        />
+        <button type="button" class="action-btn px-3 py-2" :disabled="busy" @click="onSaveShortcut">保存快捷键</button>
+      </div>
+      <p v-if="appliedShortcut" class="mt-2 text-[11px] text-[color:var(--text-tertiary)]">
+        当前生效：<span class="font-medium text-[color:var(--text-secondary)]">{{ appliedShortcut }}</span>
+      </p>
+    </div>
+
+    <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
+      <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">形态切换快捷键（2.0）</h3>
+      <p class="mt-1 text-[11px] text-[color:var(--text-secondary)]">
+        用于在「面板态 / 猫咪态」间切换。默认：
+        <code class="rounded bg-[color:var(--bg-secondary)] px-1">Alt+T</code>
+      </p>
+      <div class="mt-2 flex items-center gap-2">
+        <input
+          v-model="modeShortcutDraft"
+          type="text"
+          class="flex-1 rounded-[8px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] px-3 py-2 text-sm text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-tertiary)] focus:border-[color:var(--primary)] focus:ring-2 focus:ring-[color:var(--primary-light)]"
+          placeholder="Alt+T"
+        />
+        <button type="button" class="action-btn px-3 py-2" :disabled="busy" @click="onSaveModeShortcut">保存快捷键</button>
+      </div>
+      <p v-if="appliedModeShortcut" class="mt-2 text-[11px] text-[color:var(--text-tertiary)]">
+        当前生效：<span class="font-medium text-[color:var(--text-secondary)]">{{ appliedModeShortcut }}</span>
+      </p>
+    </div>
+
+    <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
+      <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">宠物模式（2.0）</h3>
+      <div class="mt-3 space-y-2 text-sm">
+        <label class="flex items-center gap-2">
+          <input v-model="petEnabled" type="checkbox" />
+          <span>启用宠物模式</span>
+        </label>
+        <label class="flex items-center gap-2">
+          <input v-model="petShowBadge" type="checkbox" :disabled="!petEnabled" />
+          <span>显示角标（未完成数量）</span>
+        </label>
+        <label class="flex items-center gap-2">
+          <input v-model="petAnimations" type="checkbox" :disabled="!petEnabled" />
+          <span>启用动画效果</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
       <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">外观</h3>
       <div class="mt-3 space-y-2 text-sm">
         <label class="flex items-start gap-2">
@@ -60,13 +119,13 @@
             <h4 class="text-sm font-semibold text-[color:var(--text-primary)]">Step ① 创建任务表格</h4>
             <span v-if="stepState.templateReady" class="text-xs font-semibold text-[color:var(--status-done)]">✅ 已完成</span>
           </div>
-          <p class="mt-2 text-xs text-[color:var(--text-secondary)]">如果你还没有多维表格，先复制 Topdo 模板链接到浏览器打开并创建自己的文档。</p>
+          <p class="mt-2 text-xs text-[color:var(--text-secondary)]">如果你还没有多维表格，可直接打开 Topdo 模板链接并创建自己的文档。</p>
           <button
             type="button"
             class="mt-3 rounded-[8px] border border-[color:var(--primary)] bg-[color:var(--bg-solid)] px-3 py-1.5 text-xs font-medium text-[color:var(--primary)] transition-colors hover:bg-[color:var(--primary-light)]"
-            @click="onCopyTemplateLink"
+            @click="onOpenTemplateLink"
           >
-            📋 获取 Topdo 模板
+            🔗 打开 Topdo 模板
           </button>
           <p class="mt-2 text-xs text-[color:var(--text-secondary)]">已有表格？可直接进入下一步。</p>
         </div>
@@ -155,19 +214,28 @@
               <button
                 type="button"
                 class="rounded-[6px] border border-[color:var(--primary)] bg-[color:var(--bg-solid)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--primary)] transition-colors hover:bg-[color:var(--primary-light)]"
-                @click="onCopyTutorialLink"
+                @click="onOpenTutorialLink"
               >
-                📖 复制教程链接（浏览器打开）
+                📖 打开教程
               </button>
               <span v-if="stepState.tutorialCopied" class="text-[11px] font-semibold text-[color:var(--status-done)]">
-                ✅ 已复制，请到浏览器粘贴打开
+                ✅ 已在浏览器打开
               </span>
             </div>
-            <p class="mt-2 text-[11px] text-[color:var(--text-secondary)]">操作步骤：复制链接 → 打开浏览器 → 地址栏粘贴并回车</p>
+            <p class="mt-2 text-[11px] text-[color:var(--text-secondary)]">点击按钮后会直接用默认浏览器打开教程。</p>
           </div>
         </div>
       </div>
     </template>
+
+    <div class="mt-4 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-3">
+      <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">关于 / 反馈</h3>
+      <p class="mt-1 text-[11px] text-[color:var(--text-secondary)]">遇到问题或想提建议，可直接打开 GitHub 查看项目或提交反馈。</p>
+      <div class="mt-3 grid grid-cols-2 gap-2">
+        <button type="button" class="action-btn px-3 py-2" @click="onOpenGitHub">GitHub 主页</button>
+        <button type="button" class="action-btn px-3 py-2" @click="onOpenFeedback">反馈地址</button>
+      </div>
+    </div>
 
     <p
       v-if="statusMessage"
@@ -180,6 +248,16 @@
     >
       {{ statusMessage }}
     </p>
+    <div
+      v-if="statusType === 'error' && statusDetail"
+      class="task-scrollbar mt-2 max-h-36 rounded-[8px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-2"
+    >
+      <div class="mb-2 flex items-center justify-end">
+        <button type="button" class="action-btn px-2 py-1 text-[11px]" @click="onCopyErrorDetail">复制错误详情</button>
+        <span v-if="errorDetailCopied" class="ml-2 text-[11px] text-[color:var(--status-done)]">已复制</span>
+      </div>
+      <pre class="whitespace-pre-wrap break-words font-mono text-[11px] leading-4 text-[color:var(--text-secondary)]">{{ statusDetail }}</pre>
+    </div>
 
     <div class="mt-4 grid grid-cols-3 gap-2">
       <button type="button" class="action-btn" :disabled="busy || selectedMode !== 'feishu'" @click="onTestConnection">
@@ -217,8 +295,11 @@
 
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-shell';
 import { onMounted, reactive, ref, watch } from 'vue';
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
+import { usePetStore } from '../stores/petStore';
+import { WindowMode } from '../types/pet';
 import { clearLogs, formatLogLine, logs } from '../utils/logger';
 import { setThemePreference, useThemeState, type ThemePreference } from '../utils/theme';
 
@@ -248,20 +329,57 @@ interface ConnectionResult {
   message: string;
 }
 
+interface ShortcutConfigPayload {
+  toggle_window: string;
+}
+
+interface ModeShortcutConfigPayload {
+  toggle_mode: string;
+}
+
+interface SetShortcutConfigResult {
+  success: boolean;
+  message: string;
+  applied?: string;
+}
+
+interface PetSettingsPayload {
+  enabled: boolean;
+  show_badge: boolean;
+  animations: boolean;
+  cat_position: { x: number; y: number };
+  window_mode: string;
+}
+
+const GITHUB_REPO_URL = 'https://github.com/SkyNone/Topdo';
+const GITHUB_FEEDBACK_URL = 'https://github.com/SkyNone/Topdo/issues';
+
 const emit = defineEmits<{
   (event: 'back'): void;
   (event: 'saved', mode: AppMode): void;
 }>();
 
+const petStore = usePetStore();
 const selectedMode = ref<AppMode>('local');
 const initialMode = ref<AppMode>('local');
 const busy = ref(false);
 const showLogs = ref(false);
 const statusMessage = ref('');
+const statusDetail = ref('');
 const statusType = ref<StatusType>('success');
 const autostartEnabled = ref(false);
 const initialAutostartEnabled = ref(false);
 const autostartLoading = ref(false);
+const shortcutDraft = ref('');
+const appliedShortcut = ref('');
+const modeShortcutDraft = ref('');
+const appliedModeShortcut = ref('');
+const errorDetailCopied = ref(false);
+const petEnabled = ref(true);
+const petShowBadge = ref(true);
+const petAnimations = ref(true);
+const petPosition = ref({ x: 0, y: 0 });
+const petWindowMode = ref('panel');
 
 const form = reactive<FormState>({
   bitableUrl: '',
@@ -288,7 +406,89 @@ const resolvedThemeLabel = ref<'浅色' | '深色'>(resolvedTheme.value === 'dar
 
 function setStatus(type: StatusType, message: string) {
   statusType.value = type;
-  statusMessage.value = message;
+  if (type === 'error') {
+    const firstLine = message.split('\n').find((line) => line.trim().length > 0) || message;
+    statusMessage.value = firstLine.length > 140 ? `${firstLine.slice(0, 140)}...` : firstLine;
+    statusDetail.value = message;
+  } else {
+    statusMessage.value = message;
+    statusDetail.value = '';
+  }
+}
+
+async function loadShortcutConfig() {
+  try {
+    const config = await invoke<ShortcutConfigPayload>('get_shortcut_config');
+    shortcutDraft.value = config.toggle_window || 'Cmd+Shift+T';
+    appliedShortcut.value = shortcutDraft.value;
+  } catch (error) {
+    setStatus('error', String(error));
+  }
+}
+
+async function onSaveShortcut() {
+  busy.value = true;
+  try {
+    const result = await invoke<SetShortcutConfigResult>('set_shortcut_config', {
+      toggle_window: shortcutDraft.value,
+      toggleWindow: shortcutDraft.value
+    });
+    if (!result.success) {
+      throw new Error(result.message || '快捷键保存失败');
+    }
+    const applied = result.applied || shortcutDraft.value;
+    shortcutDraft.value = applied;
+    appliedShortcut.value = applied;
+    setStatus('success', `快捷键已更新为 ${applied}`);
+  } catch (error) {
+    setStatus('error', String(error));
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function loadModeShortcutConfig() {
+  try {
+    const config = await invoke<ModeShortcutConfigPayload>('get_mode_shortcut_config');
+    modeShortcutDraft.value = config.toggle_mode || 'Alt+T';
+    appliedModeShortcut.value = modeShortcutDraft.value;
+  } catch (error) {
+    setStatus('error', String(error));
+  }
+}
+
+async function onSaveModeShortcut() {
+  busy.value = true;
+  try {
+    const result = await invoke<SetShortcutConfigResult>('set_mode_shortcut_config', {
+      toggle_mode: modeShortcutDraft.value,
+      toggleMode: modeShortcutDraft.value,
+    });
+    if (!result.success) {
+      throw new Error(result.message || '形态快捷键保存失败');
+    }
+    const applied = result.applied || modeShortcutDraft.value;
+    modeShortcutDraft.value = applied;
+    appliedModeShortcut.value = applied;
+    setStatus('success', `形态切换快捷键已更新为 ${applied}`);
+  } catch (error) {
+    setStatus('error', String(error));
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function loadPetSettings() {
+  try {
+    const payload = await invoke<PetSettingsPayload>('get_pet_settings');
+    petEnabled.value = payload.enabled;
+    petShowBadge.value = payload.show_badge;
+    petAnimations.value = payload.animations;
+    petPosition.value = payload.cat_position || { x: 0, y: 0 };
+    petWindowMode.value = payload.window_mode || 'panel';
+  } catch (error) {
+    setStatus('error', String(error));
+  }
 }
 
 function buildSaveConfigParams(): Record<string, unknown> {
@@ -365,33 +565,33 @@ function parseBitableUrl(silentOnBlur: boolean) {
   setStatus('success', '✅ 已识别 App Token 和 Table ID');
 }
 
-async function copyTemplateLink() {
+async function openTemplateLink() {
   try {
-    await navigator.clipboard.writeText(FEISHU_TEMPLATE_URL);
+    await open(FEISHU_TEMPLATE_URL);
     stepState.templateReady = true;
-    setStatus('success', '模板链接已复制，请粘贴到浏览器打开并创建自己的文档');
-  } catch {
-    setStatus('error', '复制模板链接失败');
+    setStatus('success', '已在浏览器打开 Topdo 模板');
+  } catch (error) {
+    setStatus('error', `打开模板失败: ${String(error)}`);
   }
 }
 
-function onCopyTemplateLink() {
-  void copyTemplateLink();
+function onOpenTemplateLink() {
+  void openTemplateLink();
 }
 
-async function copyTutorialLink() {
+async function openTutorialLink() {
   try {
-    await navigator.clipboard.writeText(FEISHU_TUTORIAL_URL);
+    await open(FEISHU_TUTORIAL_URL);
     stepState.tutorialCopied = true;
-    setStatus('success', '教程链接已复制，请到浏览器地址栏粘贴打开');
-  } catch {
+    setStatus('success', '已在浏览器打开教程');
+  } catch (error) {
     stepState.tutorialCopied = false;
-    setStatus('error', '复制教程链接失败');
+    setStatus('error', `打开教程失败: ${String(error)}`);
   }
 }
 
-function onCopyTutorialLink() {
-  void copyTutorialLink();
+function onOpenTutorialLink() {
+  void openTutorialLink();
 }
 
 async function loadConfig() {
@@ -432,12 +632,34 @@ async function onSave() {
   busy.value = true;
   try {
     console.log('[Settings] 保存模式:', selectedMode.value);
+    const effectiveWindowMode = petEnabled.value ? petWindowMode.value : WindowMode.Panel;
 
     const saveResult = await invoke('save_config', buildSaveConfigParams());
     console.log('[Settings] save_config 返回:', saveResult);
     if (selectedMode.value === 'feishu') {
       form.appSecret = '';
     }
+
+    await invoke('save_pet_settings', {
+      enabled: petEnabled.value,
+      showBadge: petShowBadge.value,
+      show_badge: petShowBadge.value,
+      animations: petAnimations.value,
+      catX: petPosition.value.x,
+      cat_x: petPosition.value.x,
+      catY: petPosition.value.y,
+      cat_y: petPosition.value.y,
+      windowMode: effectiveWindowMode,
+      window_mode: effectiveWindowMode,
+    });
+    await petStore.save({
+      enabled: petEnabled.value,
+      showBadge: petShowBadge.value,
+      animations: petAnimations.value,
+      catPosition: { ...petPosition.value },
+      windowMode: effectiveWindowMode === WindowMode.Cat ? WindowMode.Cat : WindowMode.Panel
+    });
+
     const verifiedMode = await invoke<string>('get_app_mode');
     console.log('[Settings] 保存后读取模式:', verifiedMode);
     if (verifiedMode !== selectedMode.value) {
@@ -495,8 +717,40 @@ async function onCopyLogs() {
   }
 }
 
+async function onCopyErrorDetail() {
+  if (!statusDetail.value) return;
+  try {
+    await navigator.clipboard.writeText(statusDetail.value);
+    errorDetailCopied.value = true;
+    setTimeout(() => {
+      errorDetailCopied.value = false;
+    }, 1500);
+  } catch (error) {
+    setStatus('error', `复制失败: ${String(error)}`);
+  }
+}
+
+async function onOpenGitHub() {
+  try {
+    await open(GITHUB_REPO_URL);
+  } catch (error) {
+    setStatus('error', `打开 GitHub 失败: ${String(error)}`);
+  }
+}
+
+async function onOpenFeedback() {
+  try {
+    await open(GITHUB_FEEDBACK_URL);
+  } catch (error) {
+    setStatus('error', `打开反馈地址失败: ${String(error)}`);
+  }
+}
+
 onMounted(() => {
   void loadConfig();
+  void loadShortcutConfig();
+  void loadModeShortcutConfig();
+  void loadPetSettings();
   void loadAutostartState();
 });
 

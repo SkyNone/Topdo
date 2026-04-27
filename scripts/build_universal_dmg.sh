@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PRODUCT="Topdo"
-VERSION="1.0.0"
+VERSION="1.0.1"
 APP_NAME="$PRODUCT.app"
 
 SIGNING_IDENTITY="Developer ID Application: Ronghao cui (6Z4232N2L9)"

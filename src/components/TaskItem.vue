@@ -148,7 +148,7 @@
               class="detail-name-input"
               placeholder="请输入任务名称"
               @blur="handleNameBlur"
-              @keydown.enter.prevent="onNameCommit"
+              @keydown.enter.prevent="saveDetailDrafts"
               @keydown.esc.prevent="cancelNameEdit"
             />
             <div class="input-divider" aria-hidden="true"></div>
@@ -215,12 +215,13 @@
                   <li v-for="item in subTasks" :key="item.id" class="detail-subtask-item">
                     <button type="button" class="detail-subtask-checkbox" :class="{ checked: item.done }" @click="toggleSubTask(item.id)"></button>
                     <input
-                      :value="item.text"
+                      v-model="item.text"
                       class="detail-subtask-input"
                       :class="{ done: item.done }"
                       placeholder="子任务名称"
-                      @change="updateSubTaskText(item.id, inputValue($event))"
-                      @keydown.enter.prevent="updateSubTaskText(item.id, inputValue($event))"
+                      @input="markSubTasksDirty"
+                      @change="normalizeSubTaskText(item.id)"
+                      @keydown.enter.prevent="normalizeSubTaskText(item.id)"
                     />
                     <button type="button" class="detail-subtask-delete" title="删除子任务" @click="deleteSubTask(item.id)">×</button>
                   </li>
@@ -247,7 +248,6 @@
                 class="detail-note-textarea"
                 placeholder="添加备注或收获..."
                 rows="3"
-                @input="onNotesInput"
               ></textarea>
               <div class="note-footer">
                 <span>{{ notesDraft.length }} 字</span>
@@ -274,7 +274,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useTaskStore } from '../stores/taskStore';
 import type { SyncState } from '../stores/taskStore';
 import type { RecurrenceRule, SubTask, Task } from '../types';
@@ -314,6 +314,8 @@ const dueDateDraft = ref(initialDueParts.date);
 const dueTimeDraft = ref(initialDueParts.time);
 const recurrenceDraft = ref<RecurrenceRule | null>(props.task.recurrence_rule || null);
 const reminderDraft = ref<number | null>(props.task.reminder_before ?? null);
+const subTasksDraft = ref<SubTask[]>(cloneSubTasks(props.task.sub_tasks));
+const subTasksDirty = ref(false);
 const isEditingDate = ref(false);
 const selectedDateOption = ref<string | number | null>(initialDueParts.date || null);
 const statusAnimating = ref(false);
@@ -321,10 +323,7 @@ const menuVisible = ref(false);
 const menuX = ref(0);
 const menuY = ref(0);
 const nameSaving = ref(false);
-const prioritySaving = ref(false);
-let notesTimer: ReturnType<typeof setTimeout> | null = null;
 let inlineBlurTimer: ReturnType<typeof setTimeout> | null = null;
-let nameBlurTimer: ReturnType<typeof setTimeout> | null = null;
 const priorityOptions = [
   { value: '普通', label: '普通', color: '#C7C7CC', tone: 'normal' },
   { value: '重要', label: '重要', color: '#007AFF', tone: 'important' },
@@ -343,7 +342,7 @@ const dateOptions: ChipOption[] = [
   { value: 'custom', label: '选择日期' }
 ];
 const searchQueryTrimmed = computed(() => store.searchQuery.trim());
-const subTasks = computed(() => props.task.sub_tasks || []);
+const subTasks = computed(() => subTasksDraft.value);
 const subTaskTotal = computed(() => subTasks.value.length);
 const subTaskDone = computed(() => subTasks.value.filter((item) => item.done).length);
 const subTaskProgress = computed(() => subTaskTotal.value ? Math.round((subTaskDone.value / subTaskTotal.value) * 100) : 0);
@@ -442,6 +441,10 @@ function nextMondayKey(): string {
   return dateKey(date);
 }
 
+function cloneSubTasks(value: SubTask[] | undefined): SubTask[] {
+  return (value || []).map((item) => ({ ...item }));
+}
+
 watch(
   () => props.task.notes,
   (next) => {
@@ -498,17 +501,23 @@ watch(
   }
 );
 
+watch(
+  () => props.task.sub_tasks,
+  (next) => {
+    if (subTasksDirty.value) return;
+    subTasksDraft.value = cloneSubTasks(next);
+  },
+  { deep: true }
+);
+
 onBeforeUnmount(() => {
-  if (notesTimer) clearTimeout(notesTimer);
   if (inlineBlurTimer) clearTimeout(inlineBlurTimer);
-  if (nameBlurTimer) clearTimeout(nameBlurTimer);
-  document.removeEventListener('click', closeContextMenu);
-  document.removeEventListener('keydown', onGlobalKeydown);
+  removeContextMenuListeners();
 });
 
-onMounted(() => {
-  document.addEventListener('click', closeContextMenu);
-  document.addEventListener('keydown', onGlobalKeydown);
+watch(menuVisible, (visible) => {
+  if (visible) addContextMenuListeners();
+  else removeContextMenuListeners();
 });
 
 const statusKey = computed(() => {
@@ -647,26 +656,6 @@ async function onRetrySync() {
   }
 }
 
-async function onNameCommit() {
-  const trimmed = nameDraft.value.trim();
-  const current = (props.task.name || '').trim();
-  if (!trimmed) {
-    nameDraft.value = current;
-    return;
-  }
-  if (trimmed === current) return;
-
-  nameSaving.value = true;
-  try {
-    await store.updateTaskName(props.task.record_id, trimmed);
-  } catch (error) {
-    nameDraft.value = current;
-    emit('error', `任务名称保存失败：${String(error)}`);
-  } finally {
-    nameSaving.value = false;
-  }
-}
-
 function cancelNameEdit() {
   nameDraft.value = props.task.name || '';
 }
@@ -678,15 +667,7 @@ function focusInsideTask(target: EventTarget | Element | null): boolean {
 
 function handleNameBlur(event: FocusEvent) {
   if (focusInsideTask(event.relatedTarget)) return;
-  if (nameBlurTimer) clearTimeout(nameBlurTimer);
-  nameBlurTimer = setTimeout(() => {
-    if (focusInsideTask(document.activeElement)) return;
-    if (!nameDraft.value.trim()) {
-      cancelNameEdit();
-      return;
-    }
-    void onNameCommit();
-  }, 150);
+  if (!nameDraft.value.trim()) cancelNameEdit();
 }
 
 function onTaskContentClick() {
@@ -751,46 +732,12 @@ async function commitInlineEdit() {
   }
 }
 
-async function onPriorityCommit() {
-  const next = (priorityDraft.value || '普通').trim() || '普通';
-  const current = normalizePriorityDraft(props.task.priority);
-  if (next === current) return;
-
-  prioritySaving.value = true;
-  try {
-    await store.updateTaskPriority(props.task.record_id, next);
-  } catch (error) {
-    priorityDraft.value = current;
-    emit('error', `重要性保存失败：${String(error)}`);
-  } finally {
-    prioritySaving.value = false;
-  }
-}
-
 function onPrioritySelect(priority: string) {
-  if (prioritySaving.value || priorityDraft.value === priority) return;
   priorityDraft.value = priority;
-  void onPriorityCommit();
 }
 
 function onPriorityChipUpdate(value: string | number | null) {
   if (typeof value === 'string') onPrioritySelect(value);
-}
-
-function inputValue(event: Event): string {
-  return event.target instanceof HTMLInputElement ? event.target.value : '';
-}
-
-function onNotesInput() {
-  if (notesTimer) clearTimeout(notesTimer);
-  notesTimer = setTimeout(async () => {
-    try {
-      await store.updateTaskNotes(props.task.record_id, notesDraft.value);
-    } catch (error) {
-      notesDraft.value = props.task.notes || '';
-      emit('error', `备注保存失败：${String(error)}`);
-    }
-  }, 500);
 }
 
 function onDueDateChange() {
@@ -798,14 +745,6 @@ function onDueDateChange() {
     dueTimeDraft.value = '';
   }
   selectedDateOption.value = dueDateDraft.value || null;
-  const nextDueDate = buildDueDateValue(dueDateDraft.value, dueTimeDraft.value);
-  void store.updateTaskDueDate(props.task.record_id, nextDueDate).catch((error) => {
-    const parts = splitDueDate(props.task.due_date);
-    dueDateDraft.value = parts.date;
-    dueTimeDraft.value = parts.time;
-    selectedDateOption.value = parts.date || null;
-    emit('error', `截止日期保存失败：${String(error)}`);
-  });
 }
 
 function startDateEdit() {
@@ -822,7 +761,7 @@ function onDateOptionUpdate(value: string | number | null) {
   if (typeof value === 'string') {
     selectedDateOption.value = value;
     dueDateDraft.value = value;
-    onDueDateChange();
+    if (!dueTimeDraft.value) dueTimeDraft.value = '23:59';
   }
 }
 
@@ -839,15 +778,11 @@ function onDateEditFocusOut(event: FocusEvent) {
   isEditingDate.value = false;
 }
 
-async function saveSubTasks(next: SubTask[]) {
-  try {
-    await store.updateTaskSubTasks(props.task.record_id, next);
-  } catch (error) {
-    emit('error', `子任务保存失败：${String(error)}`);
-  }
+function markSubTasksDirty() {
+  subTasksDirty.value = true;
 }
 
-async function addSubTask() {
+function addSubTask() {
   const text = newSubTaskText.value.trim();
   if (!text) return;
   const item: SubTask = {
@@ -856,31 +791,33 @@ async function addSubTask() {
     done: false,
     created_at: Math.floor(Date.now() / 1000).toString()
   };
+  subTasksDraft.value = [...subTasks.value, item];
+  subTasksDirty.value = true;
   newSubTaskText.value = '';
-  await saveSubTasks([...subTasks.value, item]);
 }
 
 function toggleSubTask(id: string) {
-  void saveSubTasks(
-    subTasks.value.map((item) => (item.id === id ? { ...item, done: !item.done } : item))
-  );
+  subTasksDraft.value = subTasks.value.map((item) => (item.id === id ? { ...item, done: !item.done } : item));
+  subTasksDirty.value = true;
 }
 
-function updateSubTaskText(id: string, text: string) {
-  const nextText = text.trim();
+function normalizeSubTaskText(id: string) {
   const current = subTasks.value.find((item) => item.id === id);
-  if (!current || current.text === nextText) return;
+  if (!current) return;
+  const nextText = current.text.trim();
   if (!nextText) {
     deleteSubTask(id);
     return;
   }
-  void saveSubTasks(
-    subTasks.value.map((item) => (item.id === id ? { ...item, text: nextText } : item))
-  );
+  if (current.text !== nextText) {
+    current.text = nextText;
+  }
+  subTasksDirty.value = true;
 }
 
 function deleteSubTask(id: string) {
-  void saveSubTasks(subTasks.value.filter((item) => item.id !== id));
+  subTasksDraft.value = subTasks.value.filter((item) => item.id !== id);
+  subTasksDirty.value = true;
 }
 
 function openContextMenu(event: MouseEvent) {
@@ -892,6 +829,16 @@ function openContextMenu(event: MouseEvent) {
 
 function closeContextMenu() {
   menuVisible.value = false;
+}
+
+function addContextMenuListeners() {
+  document.addEventListener('click', closeContextMenu);
+  document.addEventListener('keydown', onGlobalKeydown);
+}
+
+function removeContextMenuListeners() {
+  document.removeEventListener('click', closeContextMenu);
+  document.removeEventListener('keydown', onGlobalKeydown);
 }
 
 function onGlobalKeydown(event: KeyboardEvent) {
@@ -911,17 +858,19 @@ function handleBack() {
 
 async function saveDetailDrafts() {
   try {
-    if (notesTimer) {
-      clearTimeout(notesTimer);
-      notesTimer = null;
-    }
-    await onNameCommit();
-    await onPriorityCommit();
-    await store.updateTaskDueDate(props.task.record_id, buildDueDateValue(dueDateDraft.value, dueTimeDraft.value));
-    await store.updateTaskRecurrence(props.task.record_id, recurrenceDraft.value);
-    await store.updateTaskReminder(props.task.record_id, reminderDraft.value);
-    await addSubTask();
-    await store.updateTaskNotes(props.task.record_id, notesDraft.value);
+    addSubTask();
+    await store.updateTaskDetails(props.task.record_id, {
+      name: nameDraft.value,
+      priority: priorityDraft.value,
+      due_date: buildDueDateValue(dueDateDraft.value, dueTimeDraft.value),
+      recurrence_rule: recurrenceDraft.value,
+      reminder_before: reminderDraft.value,
+      sub_tasks: subTasks.value,
+      notes: notesDraft.value
+    });
+    subTasksDraft.value = cloneSubTasks(subTasks.value);
+    subTasksDirty.value = false;
+    expanded.value = false;
   } catch (error) {
     emit('error', `任务保存失败：${String(error)}`);
   }
@@ -1114,6 +1063,7 @@ defineExpose({
 .task-content {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .task-name {
@@ -1141,6 +1091,8 @@ defineExpose({
   font-size: 10px;
   color: var(--text-tertiary);
   line-height: 1.1;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .badge {
@@ -1150,6 +1102,14 @@ defineExpose({
   padding: 1px 6px;
   border-radius: 999px;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.badge span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .badge-recurring {
@@ -1170,6 +1130,7 @@ defineExpose({
 
 .subtask-progress {
   color: var(--text-secondary);
+  flex-shrink: 0;
 }
 
 .task-name-inline-input {
@@ -1385,9 +1346,14 @@ defineExpose({
 
 .task-right {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 3px;
   flex-shrink: 0;
+  width: 42px;
+  min-width: 42px;
+  align-self: stretch;
 }
 
 .task-time {
@@ -1440,13 +1406,14 @@ defineExpose({
 
 .sync-badge {
   border: none;
-  border-radius: 8px;
-  padding: 0 6px;
-  height: 16px;
-  line-height: 16px;
-  font-size: 10px;
+  border-radius: 999px;
+  padding: 0 5px;
+  height: 15px;
+  line-height: 15px;
+  font-size: 9px;
   color: var(--text-secondary);
   background: var(--bg-secondary);
+  white-space: nowrap;
 }
 
 .sync-badge.pending {

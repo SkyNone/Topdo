@@ -1,5 +1,12 @@
 <template>
-  <div ref="panelRef" class="quick-input">
+  <div
+    ref="panelRef"
+    class="quick-input"
+    @click.stop
+    @mousedown.stop
+    @dblclick.stop
+    @keydown.stop
+  >
     <div class="create-toolbar">
       <button type="button" class="toolbar-btn toolbar-btn--muted" @click="handleCancel">取消</button>
       <strong>新建任务</strong>

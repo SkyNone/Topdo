@@ -504,6 +504,98 @@ export const useTaskStore = defineStore('task', {
       await this.updateTaskLocalFields(recordId, { reminder_notified: true }, { reminder_notified: '1' });
     },
 
+    async updateTaskDetails(recordId: string, input: Partial<CreateTaskInput>) {
+      const target = findTaskByRecordId(this.tasks, recordId);
+      if (!target) throw new Error('任务不存在');
+
+      const fields: Record<string, string> = {};
+      const patch: Partial<Task> = {};
+      let remoteAffectingChanged = false;
+
+      if (input.name !== undefined) {
+        const name = input.name.trim();
+        if (!name) throw new Error('任务名称不能为空');
+        if (name !== (target.name || '').trim()) {
+          fields.name = name;
+          patch.name = name;
+          remoteAffectingChanged = true;
+        }
+      }
+      if (input.priority !== undefined) {
+        const priority = normalizePriority(input.priority || '普通');
+        if (priority !== normalizePriority(target.priority || '普通')) {
+          fields.priority = priority;
+          patch.priority = priority;
+          remoteAffectingChanged = true;
+        }
+      }
+      if (input.due_date !== undefined) {
+        const dueDate = input.due_date.trim();
+        if (dueDate !== (target.due_date || '').trim()) {
+          fields.due_date = dueDate;
+          patch.due_date = dueDate;
+        }
+      }
+      if (input.notes !== undefined) {
+        if (input.notes !== (target.notes || '')) {
+          fields.notes = input.notes;
+          patch.notes = input.notes;
+          remoteAffectingChanged = true;
+        }
+      }
+      if (input.sub_tasks !== undefined) {
+        const subTasks = normalizeSubTasks(input.sub_tasks);
+        if (JSON.stringify(subTasks) !== JSON.stringify(normalizeSubTasks(target.sub_tasks || []))) {
+          fields.sub_tasks = JSON.stringify(subTasks);
+          patch.sub_tasks = subTasks;
+        }
+      }
+      if (input.recurrence_rule !== undefined) {
+        const recurrence = input.recurrence_rule || null;
+        if (JSON.stringify(recurrence) !== JSON.stringify(target.recurrence_rule || null)) {
+          fields.recurrence_rule = recurrence ? JSON.stringify(recurrence) : '';
+          patch.recurrence_rule = recurrence;
+        }
+      }
+      if (input.reminder_before !== undefined) {
+        const reminderBefore = input.reminder_before ?? null;
+        if (reminderBefore !== (target.reminder_before ?? null)) {
+          fields.reminder_before = reminderBefore === null ? '' : String(reminderBefore);
+          fields.reminder_notified = '0';
+          patch.reminder_before = reminderBefore;
+          patch.reminder_notified = false;
+        }
+      }
+
+      if (Object.keys(fields).length === 0) return;
+
+      const previous = { ...target };
+      this.setTaskPatch(recordId, {
+        ...patch,
+        sync_status: this.mode === 'feishu' && remoteAffectingChanged ? 'pending' : target.sync_status
+      });
+
+      try {
+        const updated = await invoke<Task>('update_local_task', {
+          id: target.id || target.record_id,
+          fields
+        });
+        this.setTaskPatch(recordId, {
+          ...normalizeTask(updated),
+          record_id: updated.record_id || recordId,
+          id: updated.id || updated.record_id || recordId,
+          sync_status: this.mode === 'feishu' && remoteAffectingChanged ? 'pending' : updated.sync_status
+        });
+        this.tasks = sortTasksByPolicy(this.tasks);
+        if (remoteAffectingChanged) {
+          this.scheduleSyncAfterWrite();
+        }
+      } catch (error) {
+        this.setTaskPatch(recordId, previous);
+        throw error;
+      }
+    },
+
     async initRecurringTasks() {
       const instances = generateRecurringInstances(this.tasks);
       for (const instance of instances) {
@@ -1106,41 +1198,46 @@ export const useTaskStore = defineStore('task', {
         }
         const normalizedCreated = normalizeTask(created);
         this.tasks.unshift(normalizedCreated);
+        const patch: Partial<Task> = {};
+        const fields: Record<string, string> = {};
+
         if (dueDate) {
-          await this.updateTaskDueDate(normalizedCreated.record_id, dueDate);
+          patch.due_date = dueDate;
+          fields.due_date = dueDate;
         }
-        if (notes || subTasks.length) {
-          await this.updateTaskLocalFields(
-            normalizedCreated.record_id,
-            {
-              notes,
-              sub_tasks: subTasks
-            },
-            {
-              notes,
-              sub_tasks: JSON.stringify(subTasks)
-            }
-          );
+        if (notes) {
+          patch.notes = notes;
+          fields.notes = notes;
+        }
+        if (subTasks.length) {
+          patch.sub_tasks = subTasks;
+          fields.sub_tasks = JSON.stringify(subTasks);
         }
         if (recurrenceRule) {
-          await this.updateTaskRecurrence(normalizedCreated.record_id, recurrenceRule);
+          patch.recurrence_rule = recurrenceRule;
+          fields.recurrence_rule = JSON.stringify(recurrenceRule);
         }
-        if (recurrenceParentId || recurrenceIndex || reminderBefore !== null) {
-          await this.updateTaskLocalFields(
-            normalizedCreated.record_id,
-            {
-              recurrence_parent_id: recurrenceParentId,
-              recurrence_index: recurrenceIndex,
-              reminder_before: reminderBefore,
-              reminder_notified: false
-            },
-            {
-              recurrence_parent_id: recurrenceParentId,
-              recurrence_index: recurrenceIndex === null ? '' : String(recurrenceIndex),
-              reminder_before: reminderBefore === null ? '' : String(reminderBefore),
-              reminder_notified: '0'
-            }
-          );
+        if (recurrenceParentId || recurrenceIndex !== null || reminderBefore !== null) {
+          patch.recurrence_parent_id = recurrenceParentId;
+          patch.recurrence_index = recurrenceIndex;
+          patch.reminder_before = reminderBefore;
+          patch.reminder_notified = false;
+          fields.recurrence_parent_id = recurrenceParentId;
+          fields.recurrence_index = recurrenceIndex === null ? '' : String(recurrenceIndex);
+          fields.reminder_before = reminderBefore === null ? '' : String(reminderBefore);
+          fields.reminder_notified = '0';
+        }
+
+        if (Object.keys(fields).length > 0) {
+          try {
+            await this.updateTaskLocalFields(
+              normalizedCreated.record_id,
+              patch,
+              fields
+            );
+          } catch (error) {
+            log('API', '本地新任务附加字段保存失败', { error: String(error) });
+          }
         }
         return created.record_id;
       }
@@ -1216,35 +1313,37 @@ export const useTaskStore = defineStore('task', {
         } else {
           this.offlineMode = true;
         }
-        // 无论首轮是否成功，都在 1s 后触发一次增量同步：
-        // - 成功时可拉取到其他端更新
-        // - 失败时可自动重试把 pending 任务推到飞书
-        this.scheduleSyncAfterWrite();
+        const localPatch: Partial<Task> = {};
+        const localFields: Record<string, string> = {};
         if (dueDate) {
-          await this.updateTaskDueDate(result.record_id, dueDate);
+          localPatch.due_date = dueDate;
+          localFields.due_date = dueDate;
         }
         if (notes || subTasks.length || recurrenceRule || recurrenceParentId || recurrenceIndex || reminderBefore !== null) {
-          await this.updateTaskLocalFields(
-            result.record_id,
-            {
-              notes,
-              sub_tasks: subTasks,
-              recurrence_rule: recurrenceRule,
-              recurrence_parent_id: recurrenceParentId,
-              recurrence_index: recurrenceIndex,
-              reminder_before: reminderBefore,
-              reminder_notified: false
-            },
-            {
-              notes,
-              sub_tasks: JSON.stringify(subTasks),
-              recurrence_rule: recurrenceRule ? JSON.stringify(recurrenceRule) : '',
-              recurrence_parent_id: recurrenceParentId,
-              recurrence_index: recurrenceIndex === null ? '' : String(recurrenceIndex),
-              reminder_before: reminderBefore === null ? '' : String(reminderBefore),
-              reminder_notified: '0'
-            }
-          );
+          localPatch.notes = notes;
+          localPatch.sub_tasks = subTasks;
+          localPatch.recurrence_rule = recurrenceRule;
+          localPatch.recurrence_parent_id = recurrenceParentId;
+          localPatch.recurrence_index = recurrenceIndex;
+          localPatch.reminder_before = reminderBefore;
+          localPatch.reminder_notified = false;
+          localFields.notes = notes;
+          localFields.sub_tasks = JSON.stringify(subTasks);
+          localFields.recurrence_rule = recurrenceRule ? JSON.stringify(recurrenceRule) : '';
+          localFields.recurrence_parent_id = recurrenceParentId;
+          localFields.recurrence_index = recurrenceIndex === null ? '' : String(recurrenceIndex);
+          localFields.reminder_before = reminderBefore === null ? '' : String(reminderBefore);
+          localFields.reminder_notified = '0';
+        }
+        if (Object.keys(localFields).length > 0) {
+          try {
+            await this.updateTaskLocalFields(result.record_id, localPatch, localFields);
+          } catch (error) {
+            log('API', '飞书新任务本地附加字段保存失败', { error: String(error) });
+          }
+        }
+        if (!result.synced) {
+          this.scheduleSyncAfterWrite();
         }
 
         return result.record_id;

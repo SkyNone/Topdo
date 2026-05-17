@@ -36,7 +36,7 @@
           <Settings ref="settingsRef" @back="currentView = 'main'" @saved="onSettingsSaved" />
         </section>
 
-        <section v-else-if="taskStore.loading" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-transparent">
+        <section v-else-if="taskStore.loading && taskStore.tasks.length === 0" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-transparent">
           <span class="h-7 w-7 animate-spin rounded-full border-2 border-[color:var(--primary)] border-t-transparent"></span>
           <p class="text-[var(--font-size-base)] text-[color:var(--text-secondary)]">正在加载任务...</p>
         </section>

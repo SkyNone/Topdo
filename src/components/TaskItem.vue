@@ -164,10 +164,14 @@
               </div>
               <div v-else class="date-edit-block" @click.stop @focusout="onDateEditFocusOut">
                 <ChipSelector :model-value="selectedDateOption" :options="dateOptions" tone="blue" compact @update:model-value="onDateOptionUpdate" />
-                <div class="date-edit-inputs">
+                <div v-if="showCustomDueDateInput" class="date-edit-inputs">
+                  <span>日期</span>
                   <input v-model="dueDateDraft" type="date" @change="onDueDateChange" />
+                </div>
+                <div class="date-edit-inputs">
+                  <span>时间</span>
                   <input v-model="dueTimeDraft" type="time" :disabled="!dueDateDraft" @change="onDueDateChange" />
-                  <button type="button" @click="clearDetailDueDate">清除</button>
+                  <small>{{ dueDateDraft ? '默认 23:59' : '先选日期' }}</small>
                 </div>
               </div>
             </div>
@@ -177,7 +181,7 @@
             <div class="detail-option-icon detail-option-icon--blue"><Icon name="priority" :size="17" /></div>
             <div class="detail-option-content">
               <span class="detail-option-label">优先级</span>
-              <ChipSelector v-model="priorityDraft" :options="priorityChipOptions" tone="blue" @update:model-value="onPriorityChipUpdate" />
+              <ChipSelector v-model="priorityDraft" :options="priorityChipOptions" :tone="priorityChipTone" @update:model-value="onPriorityChipUpdate" />
             </div>
           </section>
 
@@ -360,6 +364,7 @@ const priorityToneClass = computed(() => {
   if (priorityDraft.value === '重要') return 'important';
   return 'normal';
 });
+const priorityChipTone = computed(() => priorityDraft.value === '紧急' ? 'red' : 'blue');
 const statusBadgeClass = computed(() => {
   if (statusKey.value === 'completed') return 'detail-badge--done';
   if (statusKey.value === 'in_progress') return 'detail-badge--progress';
@@ -377,6 +382,10 @@ const formattedDueDate = computed(() => {
   return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
 });
 const formattedDueTime = computed(() => dueTimeDraft.value || '23:59');
+const showCustomDueDateInput = computed(() => {
+  if (!dueDateDraft.value) return false;
+  return selectedDateOption.value === 'custom' || !dateOptions.some((option) => option.value === dueDateDraft.value);
+});
 
 const highlightedNameSegments = computed(() => {
   const source = props.task.name || '未命名任务';
@@ -749,6 +758,9 @@ function onDueDateChange() {
 
 function startDateEdit() {
   isEditingDate.value = true;
+  if (dueDateDraft.value && !dueTimeDraft.value) {
+    dueTimeDraft.value = '23:59';
+  }
   selectedDateOption.value = dueDateDraft.value || null;
 }
 
@@ -763,13 +775,6 @@ function onDateOptionUpdate(value: string | number | null) {
     dueDateDraft.value = value;
     if (!dueTimeDraft.value) dueTimeDraft.value = '23:59';
   }
-}
-
-function clearDetailDueDate() {
-  dueDateDraft.value = '';
-  dueTimeDraft.value = '';
-  selectedDateOption.value = null;
-  onDueDateChange();
 }
 
 function onDateEditFocusOut(event: FocusEvent) {
@@ -921,10 +926,19 @@ function requestDeleteFromKeyboard() {
   emit('request-delete', props.task);
 }
 
+function openFromReminder() {
+  expanded.value = true;
+  emit('focus', props.task.record_id);
+  void nextTick(() => {
+    taskItemRootRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
 defineExpose({
   toggleExpandFromKeyboard,
   toggleStatusFromKeyboard,
-  requestDeleteFromKeyboard
+  requestDeleteFromKeyboard,
+  openFromReminder
 });
 </script>
 
@@ -1806,40 +1820,51 @@ defineExpose({
 
 .date-edit-block {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .date-edit-inputs {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(96px, 0.9fr);
-  gap: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 10px;
 }
 
-.date-edit-inputs input,
-.date-edit-inputs button {
-  height: 40px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-solid);
-  color: var(--text-primary);
-  font-family: var(--font-family);
-  font-size: 15px;
+.date-edit-inputs span,
+.date-edit-inputs small {
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.date-edit-inputs small {
+  color: var(--text-tertiary);
 }
 
 .date-edit-inputs input {
-  min-width: 0;
-  width: 100%;
-  padding: 0 12px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 11px;
+  font-weight: 500;
 }
 
-.date-edit-inputs button {
-  grid-column: 1 / -1;
-  justify-self: end;
-  min-width: 76px;
-  height: 32px;
-  padding: 0 12px;
-  cursor: pointer;
-  color: var(--text-secondary);
+.date-edit-inputs input {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.date-edit-inputs input[type='date'] {
+  width: 118px;
+}
+
+.date-edit-inputs input[type='time'] {
+  width: 86px;
 }
 
 .detail-subtask-section {

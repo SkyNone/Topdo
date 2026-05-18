@@ -6,7 +6,7 @@
         <span>本地模式 | 共 {{ taskCount }} 条任务</span>
         <button type="button" class="shortcut-btn" title="快捷键" @click="$emit('open-shortcuts')">⌘K 快捷键</button>
       </div>
-      <span class="status-right">Topdo v1.0</span>
+      <span class="status-right">Topdo v2.0</span>
     </template>
 
     <template v-else>
@@ -25,7 +25,7 @@
         <button type="button" class="shortcut-btn" title="快捷键" @click="$emit('open-shortcuts')">⌘K 快捷键</button>
       </div>
       <span class="status-right" :title="lastSyncErrorSummary || ''">
-        {{ failedCount > 0 && lastSyncErrorSummary ? '同步异常' : 'Topdo v1.0' }}
+        {{ failedCount > 0 && lastSyncErrorSummary ? '同步异常' : 'Topdo v2.0' }}
       </span>
     </template>
   </footer>

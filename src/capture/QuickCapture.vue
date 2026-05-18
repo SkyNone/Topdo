@@ -15,7 +15,6 @@
 
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit as emitEvent, listen } from '@tauri-apps/api/event';
 import { nextTick, onMounted, onUnmounted, ref } from 'vue';
@@ -29,25 +28,9 @@ const inputRef = ref<HTMLInputElement | null>(null);
 const shortcutLabel = '⌥Space';
 let unlisten: (() => void) | null = null;
 
-interface SystemSettingsPayload {
-  quick_capture_notify: boolean;
-}
-
 function todayKey(): string {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-async function notifyAdded(name: string) {
-  try {
-    const settings = await invoke<SystemSettingsPayload>('get_system_settings');
-    if (!settings.quick_capture_notify) return;
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === 'granted';
-    if (granted) await sendNotification({ title: 'Topdo', body: `已添加：${name}` });
-  } catch {
-    // notification is best-effort
-  }
 }
 
 async function handleCreate() {
@@ -57,15 +40,9 @@ async function handleCreate() {
     await taskStore.createTask({ name, priority: '普通', status: '待处理', due_date: buildDueDateValue(todayKey(), '') });
     await emitEvent('tasks-updated');
     taskName.value = '';
-    await notifyAdded(name);
     await handleClose();
   } catch (error) {
     console.error('快速新建任务失败:', error);
-    try {
-      sendNotification({ title: 'Topdo · 创建失败', body: String(error) });
-    } catch {
-      // notification is best-effort
-    }
   }
 }
 

@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PRODUCT="Topdo"
-VERSION="1.0.1"
+VERSION="$(node -p "require('./package.json').version")"
 APP_NAME="$PRODUCT.app"
 NOTICE_FILE="$ROOT_DIR/docs/01_安装说明.txt"
 
@@ -18,8 +18,9 @@ pnpm tauri build --target universal-apple-darwin --bundles app
 BUNDLE_BASE="$ROOT_DIR/src-tauri/target/universal-apple-darwin/release/bundle"
 DMG_DIR="$BUNDLE_BASE/dmg"
 MACOS_DIR="$BUNDLE_BASE/macos"
-BUNDLE_DMG_SH="$DMG_DIR/bundle_dmg.sh"
-VOL_ICON="$DMG_DIR/icon.icns"
+HELPER_DMG_DIR="$ROOT_DIR/src-tauri/target/debug/bundle/dmg"
+BUNDLE_DMG_SH="$HELPER_DMG_DIR/bundle_dmg.sh"
+VOL_ICON="$HELPER_DMG_DIR/icon.icns"
 APP_PATH="$MACOS_DIR/$APP_NAME"
 OUTPUT_DMG="$DMG_DIR/${PRODUCT}_${VERSION}_universal.dmg"
 TEMP_DMG="$DMG_DIR/${PRODUCT}_${VERSION}_universal_with_notice.dmg"
@@ -29,6 +30,7 @@ if [ ! -d "$APP_PATH" ]; then
   echo "[错误] 未找到 app: $APP_PATH"
   exit 1
 fi
+mkdir -p "$DMG_DIR"
 if [ ! -f "$BUNDLE_DMG_SH" ]; then
   echo "[错误] 未找到 bundle_dmg.sh: $BUNDLE_DMG_SH"
   exit 1

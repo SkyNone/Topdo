@@ -7,6 +7,19 @@ let taskReminderTimer: ReturnType<typeof setInterval> | null = null;
 let habitReminderTimer: ReturnType<typeof setInterval> | null = null;
 const habitNotifiedKeys = new Set<string>();
 
+export interface InAppReminder {
+  id: string;
+  kind: 'task' | 'habit';
+  tone: 'overdue' | 'due' | 'habit';
+  title: string;
+  body: string;
+  actionLabel: string;
+  targetId: string;
+  createdAt: number;
+}
+
+type InAppReminderHandler = (reminder: InAppReminder) => void;
+
 async function ensurePermission(): Promise<boolean> {
   try {
     let granted = await isPermissionGranted();
@@ -40,12 +53,16 @@ function reminderTitle(minutes: number): string {
   return `${minutes}分钟后截止`;
 }
 
-export function startReminderService(getTasks: () => Task[], markNotified: (recordId: string) => Promise<void> | void) {
+export function startReminderService(
+  getTasks: () => Task[],
+  markNotified: (recordId: string) => Promise<void> | void,
+  onInAppReminder?: InAppReminderHandler
+) {
   if (taskReminderTimer) clearInterval(taskReminderTimer);
   void ensurePermission();
 
-  taskReminderTimer = setInterval(async () => {
-    if (!(await ensurePermission())) return;
+  const checkReminders = async () => {
+    const canSendSystemNotification = await ensurePermission();
     const now = Date.now();
     for (const task of getTasks()) {
       if (normalizeStatus(task.status) === 'completed') continue;
@@ -55,13 +72,34 @@ export function startReminderService(getTasks: () => Task[], markNotified: (reco
       const reminder = due - Number(task.reminder_before) * 60_000;
       const shouldNotify = (now >= reminder && now <= reminder + 120_000) || now > due;
       if (!shouldNotify) continue;
-      await sendNotification({
-        title: `Topdo · ${now > due ? '已逾期' : reminderTitle(Number(task.reminder_before))}`,
-        body: task.name
+      const title = now > due ? '任务已逾期' : reminderTitle(Number(task.reminder_before));
+      const systemTitle = `Topdo · ${now > due ? '已逾期' : reminderTitle(Number(task.reminder_before))}`;
+      if (canSendSystemNotification) {
+        try {
+          await sendNotification({
+            title: systemTitle,
+            body: task.name
+          });
+        } catch (error) {
+          console.warn('发送任务系统通知失败:', error);
+        }
+      }
+      onInAppReminder?.({
+        id: `task:${task.record_id}:${now}`,
+        kind: 'task',
+        tone: now > due ? 'overdue' : 'due',
+        title,
+        body: task.name,
+        actionLabel: '查看',
+        targetId: task.record_id,
+        createdAt: now
       });
       await markNotified(task.record_id);
     }
-  }, 60_000);
+  };
+
+  setTimeout(() => void checkReminders(), 1_000);
+  taskReminderTimer = setInterval(() => void checkReminders(), 15_000);
 }
 
 function isHabitRequiredDay(date: Date, habit: Habit): boolean {
@@ -71,12 +109,12 @@ function isHabitRequiredDay(date: Date, habit: Habit): boolean {
   return habit.frequency_days?.includes(day) ?? false;
 }
 
-export function startHabitReminderService(getHabits: () => Habit[], getLogs: () => HabitLog[]) {
+export function startHabitReminderService(getHabits: () => Habit[], getLogs: () => HabitLog[], onInAppReminder?: InAppReminderHandler) {
   if (habitReminderTimer) clearInterval(habitReminderTimer);
   void ensurePermission();
 
-  habitReminderTimer = setInterval(async () => {
-    if (!(await ensurePermission())) return;
+  const checkHabitReminders = async () => {
+    const canSendSystemNotification = await ensurePermission();
     const now = new Date();
     const currentTime = now.toTimeString().slice(0, 5);
     const today = dateKey(now);
@@ -87,7 +125,27 @@ export function startHabitReminderService(getHabits: () => Habit[], getLogs: () 
       const key = `${habit.id}:${today}:${currentTime}`;
       if (habitNotifiedKeys.has(key)) continue;
       habitNotifiedKeys.add(key);
-      await sendNotification({ title: 'Topdo · 习惯提醒', body: `${habit.emoji} ${habit.name}` });
+      const body = `${habit.emoji} ${habit.name}`;
+      if (canSendSystemNotification) {
+        try {
+          await sendNotification({ title: 'Topdo · 习惯提醒', body });
+        } catch (error) {
+          console.warn('发送习惯系统通知失败:', error);
+        }
+      }
+      onInAppReminder?.({
+        id: `habit:${habit.id}:${today}:${currentTime}`,
+        kind: 'habit',
+        tone: 'habit',
+        title: '该打卡了',
+        body,
+        actionLabel: '去打卡',
+        targetId: habit.id,
+        createdAt: Date.now()
+      });
     }
-  }, 60_000);
+  };
+
+  setTimeout(() => void checkHabitReminders(), 1_000);
+  habitReminderTimer = setInterval(() => void checkHabitReminders(), 15_000);
 }

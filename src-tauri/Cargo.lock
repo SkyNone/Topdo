@@ -5047,7 +5047,7 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 
 [[package]]
 name = "topdo"
-version = "0.1.1"
+version = "2.0.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

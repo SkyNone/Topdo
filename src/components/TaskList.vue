@@ -189,6 +189,12 @@ function requestDeleteFocused() {
   itemRefs.get(focusedTaskId.value)?.requestDeleteFromKeyboard?.();
 }
 
+async function openTask(recordId: string) {
+  focusedTaskId.value = recordId;
+  await nextTick();
+  itemRefs.get(recordId)?.openFromReminder?.();
+}
+
 function onDragStart(task: Task, event: DragEvent) {
   if (normalizeTaskStatus(task.status) === 'completed') {
     event.preventDefault();
@@ -268,6 +274,7 @@ defineExpose({
   toggleFocusedExpand,
   toggleFocusedStatus,
   requestDeleteFocused,
+  openTask,
   clearFocus,
   hasTasks
 });

@@ -123,6 +123,13 @@
       @close="shortcutSheetVisible = false"
     />
 
+      <ReminderToast
+        v-if="!isMiniMode"
+        :items="reminderToasts"
+        @open="openReminderToast"
+        @dismiss="dismissReminderToast"
+      />
+
       <div
         v-if="taskStore.searchOpen && currentView === 'main' && !isMiniMode"
         class="search-overlay"
@@ -177,6 +184,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue';
 import CatPet from './components/CatPet/CatPet.vue';
 import OnboardingBar from './components/OnboardingBar.vue';
 import PanelCatCorner from './components/PanelCatCorner.vue';
+import ReminderToast from './components/ReminderToast.vue';
 import Settings from './components/Settings.vue';
 import ShortcutSheet from './components/ShortcutSheet.vue';
 import StatsBar from './components/StatsBar.vue';
@@ -192,8 +200,7 @@ import { useTaskStore } from './stores/taskStore';
 import type { TaskFilter } from './stores/taskStore';
 import type { Task } from './types';
 import { WindowMode } from './types/pet';
-import { runDailyBackup } from './services/exportService';
-import { startHabitReminderService, startReminderService } from './utils/reminder';
+import { startHabitReminderService, startReminderService, type InAppReminder } from './utils/reminder';
 import { initializeTheme, toggleThemeQuickly, useThemeState } from './utils/theme';
 
 type ViewType = 'welcome' | 'main' | 'settings';
@@ -213,11 +220,6 @@ interface WindowModeChangedPayload {
   mini_mode: boolean;
 }
 
-interface SystemSettingsPayload {
-  auto_backup: boolean;
-  backup_retention_days: number;
-}
-
 const taskStore = useTaskStore();
 const appStore = useAppStore();
 const habitStore = useHabitStore();
@@ -235,11 +237,12 @@ const searchInputRef = ref<HTMLInputElement | null>(null);
 
 let miniStartPoint: { x: number; y: number } | null = null;
 let miniMouseMoveHandler: ((event: MouseEvent) => void) | null = null;
-const BACKUP_DATE_KEY = 'topdo_last_auto_backup_date';
 let miniMouseUpHandler: (() => void) | null = null;
 
 const toast = ref('');
+const reminderToasts = ref<InAppReminder[]>([]);
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
+const reminderToastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let unlistenResized: (() => void) | null = null;
 let unlistenWindowModeChanged: UnlistenFn | null = null;
@@ -278,6 +281,44 @@ function showToast(message: string, duration = 2500) {
   toastTimer = setTimeout(() => {
     toast.value = '';
   }, duration);
+}
+
+function dismissReminderToast(id: string) {
+  const timer = reminderToastTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    reminderToastTimers.delete(id);
+  }
+  reminderToasts.value = reminderToasts.value.filter((item) => item.id !== id);
+}
+
+function showReminderToast(reminder: InAppReminder) {
+  reminderToasts.value = [reminder, ...reminderToasts.value.filter((item) => item.id !== reminder.id)].slice(0, 3);
+  const existing = reminderToastTimers.get(reminder.id);
+  if (existing) clearTimeout(existing);
+  reminderToastTimers.set(
+    reminder.id,
+    setTimeout(() => {
+      dismissReminderToast(reminder.id);
+    }, 6000)
+  );
+}
+
+async function openReminderToast(reminder: InAppReminder) {
+  dismissReminderToast(reminder.id);
+  if (isMiniMode.value) {
+    await restoreNormalMode();
+  }
+  currentView.value = 'main';
+  if (reminder.kind === 'habit') {
+    appStore.switchMode('habits');
+    return;
+  }
+  appStore.switchMode('tasks');
+  taskStore.clearSearch();
+  taskStore.setFilter('all');
+  await nextTick();
+  taskListRef.value?.openTask?.(reminder.targetId);
 }
 
 async function syncWindowState() {
@@ -376,24 +417,6 @@ async function onSettingsSaved(mode: 'local' | 'feishu') {
   } catch (error) {
     // 保持当前模式，仅提示错误
     showError(String(error));
-  }
-}
-
-function todayKey() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
-async function maybeRunAutoBackup() {
-  try {
-    const settings = await invoke<SystemSettingsPayload>('get_system_settings');
-    if (!settings.auto_backup) return;
-    const today = todayKey();
-    if (localStorage.getItem(BACKUP_DATE_KEY) === today) return;
-    await runDailyBackup(taskStore.tasks, habitStore.habits, settings.backup_retention_days || 7);
-    localStorage.setItem(BACKUP_DATE_KEY, today);
-  } catch (error) {
-    console.warn('自动备份失败:', error);
   }
 }
 
@@ -840,11 +863,14 @@ onMounted(async () => {
   }
   await petStore.save();
   await taskStore.initRecurringTasks().catch((error) => showError(String(error)));
-  await maybeRunAutoBackup();
   await ensureNotificationPermission();
   taskStore.startDailyRecurrenceCheck();
-  startReminderService(() => (appStore.reminderEnabled ? taskStore.tasks : []), (recordId) => taskStore.markTaskReminderNotified(recordId));
-  startHabitReminderService(() => habitStore.habits, () => habitStore.logs);
+  startReminderService(
+    () => (appStore.reminderEnabled ? taskStore.tasks : []),
+    (recordId) => taskStore.markTaskReminderNotified(recordId),
+    showReminderToast
+  );
+  startHabitReminderService(() => habitStore.habits, () => habitStore.logs, showReminderToast);
   await ensureInitialWindowTraitsApplied();
   maybeShowOnboarding();
   maybeShowShortcutTip();
@@ -884,6 +910,8 @@ onUnmounted(() => {
     clearTimeout(toastTimer);
     toastTimer = null;
   }
+  reminderToastTimers.forEach((timer) => clearTimeout(timer));
+  reminderToastTimers.clear();
 });
 
 watch(

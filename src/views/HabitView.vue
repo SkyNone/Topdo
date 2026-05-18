@@ -53,9 +53,26 @@ onMounted(() => void habitStore.fetchHabits());
 async function createHabit(input: Partial<Habit>) { await habitStore.createHabit(input); }
 async function updateHabit(input: Partial<Habit>) { if (editingHabit.value) await habitStore.updateHabit(editingHabit.value.id, input); editingHabit.value = null; selectedHabit.value = null; }
 async function checkIn(id: string) { await habitStore.checkIn(id); const habit = habitStore.habitsWithStats.find((item) => item.id === id); successStreak.value = habit?.currentStreak || 1; successVisible.value = true; if (successTimer) clearTimeout(successTimer); successTimer = setTimeout(() => { successVisible.value = false; }, 1500); }
-function editSelected() { editingHabit.value = selectedHabit.value ? { ...selectedHabit.value } : null; }
-async function archiveSelected() { if (!selectedHabit.value) return; await habitStore.archiveHabit(selectedHabit.value.id); selectedHabit.value = null; }
-async function deleteSelected() { if (!selectedHabit.value) return; await habitStore.deleteHabit(selectedHabit.value.id); selectedHabit.value = null; }
+function editSelected() {
+  const habit = selectedHabit.value;
+  if (!habit) return;
+  selectedHabit.value = null;
+  editingHabit.value = { ...habit };
+}
+async function archiveSelected() {
+  const habit = selectedHabit.value;
+  if (!habit) return;
+  editingHabit.value = null;
+  selectedHabit.value = null;
+  await habitStore.archiveHabit(habit.id);
+}
+async function deleteSelected() {
+  const habit = selectedHabit.value;
+  if (!habit) return;
+  editingHabit.value = null;
+  selectedHabit.value = null;
+  await habitStore.deleteHabit(habit.id);
+}
 </script>
 
 <style scoped>

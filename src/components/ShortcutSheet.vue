@@ -6,56 +6,61 @@
         <button type="button" class="close-btn" title="关闭" @click="$emit('close')">Esc</button>
       </div>
 
-      <div class="sheet-group">
-        <p class="group-title">全局</p>
-        <div class="row"><span>新建任务</span><kbd>⌘N</kbd></div>
-        <div class="row"><span>打开/关闭设置</span><kbd>⌘,</kbd></div>
-        <div class="row"><span>主题切换</span><kbd>⌘⇧L</kbd></div>
-        <div class="row"><span>快捷键面板</span><kbd>⌘K</kbd></div>
-        <div class="row"><span>关闭当前层</span><kbd>Esc</kbd></div>
-        <div class="row">
-          <span>手动同步</span>
-          <div class="keys">
-            <kbd>⌘⇧R</kbd>
-            <em>仅飞书</em>
+      <div class="sheet-body task-scrollbar">
+        <div class="sheet-group">
+          <p class="group-title">全局</p>
+          <div class="row"><span>新建任务</span><kbd>⌘N</kbd></div>
+          <div class="row"><span>快捷新建任务</span><kbd>{{ quickCaptureShortcut }}</kbd></div>
+          <div class="row"><span>打开/关闭设置</span><kbd>⌘,</kbd></div>
+          <div class="row"><span>主题切换</span><kbd>⌘⇧L</kbd></div>
+          <div class="row"><span>快捷键面板</span><kbd>⌘K</kbd></div>
+          <div class="row"><span>关闭当前层</span><kbd>Esc</kbd></div>
+          <div class="row">
+            <span>手动同步</span>
+            <div class="keys">
+              <kbd>⌘⇧R</kbd>
+              <em>仅飞书</em>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="sheet-group">
-        <p class="group-title">窗口</p>
-        <div class="row"><span>显示/隐藏 Topdo</span><kbd>{{ toggleWindowShortcut }}</kbd></div>
-        <div class="row"><span>面板 / 迷你模式切换</span><kbd>{{ toggleModeShortcut }}</kbd></div>
-      </div>
+        <div class="sheet-group">
+          <p class="group-title">窗口</p>
+          <div class="row"><span>显示/隐藏 Topdo</span><kbd>{{ toggleWindowShortcut }}</kbd></div>
+          <div class="row"><span>面板 / 迷你模式切换</span><kbd>{{ toggleModeShortcut }}</kbd></div>
+        </div>
 
-      <div class="sheet-group">
-        <p class="group-title">筛选与搜索</p>
-        <div class="row"><span>搜索任务</span><kbd>⌘F</kbd></div>
-        <div class="row"><span>待办</span><kbd>⌘1</kbd></div>
-        <div class="row"><span>进行中</span><kbd>⌘2</kbd></div>
-        <div class="row"><span>已完成</span><kbd>⌘3</kbd></div>
-        <div class="row"><span>全部</span><kbd>⌘4</kbd></div>
-      </div>
+        <div class="sheet-group">
+          <p class="group-title">筛选与搜索</p>
+          <div class="row"><span>搜索任务</span><kbd>⌘F</kbd></div>
+          <div class="row"><span>任务 / 习惯切换</span><kbd>⌘J</kbd></div>
+          <div class="row"><span>待办</span><kbd>⌘1</kbd></div>
+          <div class="row"><span>进行中</span><kbd>⌘2</kbd></div>
+          <div class="row"><span>已完成</span><kbd>⌘3</kbd></div>
+          <div class="row"><span>全部</span><kbd>⌘4</kbd></div>
+        </div>
 
-      <div class="sheet-group">
-        <p class="group-title">任务列表</p>
-        <div class="row"><span>上下移动焦点</span><kbd>↑ / ↓</kbd></div>
-        <div class="row"><span>展开/收起任务</span><kbd>Enter</kbd></div>
-        <div class="row"><span>切换任务状态</span><kbd>⌘Enter</kbd></div>
-        <div class="row">
-          <span>删除任务</span>
-          <div class="keys">
-            <kbd>Delete / ⌫</kbd>
-            <em>仅本地</em>
+        <div class="sheet-group">
+          <p class="group-title">任务列表</p>
+          <div class="row"><span>上下移动焦点</span><kbd>↑ / ↓</kbd></div>
+          <div class="row"><span>展开/收起任务</span><kbd>Enter</kbd></div>
+          <div class="row"><span>切换任务状态</span><kbd>⌘Enter</kbd></div>
+          <div class="row">
+            <span>删除任务</span>
+            <div class="keys">
+              <kbd>Delete / ⌫</kbd>
+              <em>仅本地</em>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="sheet-group">
-        <p class="group-title">快速交互</p>
-        <div class="row"><span>双击任务标题</span><kbd>编辑名称</kbd></div>
-        <div class="row"><span>回车 / 失焦</span><kbd>保存名称</kbd></div>
-        <div class="row"><span>Esc</span><kbd>取消编辑</kbd></div>
+        <div class="sheet-group">
+          <p class="group-title">新建 / 编辑</p>
+          <div class="row"><span>创建任务</span><kbd>Enter / ⌘S</kbd></div>
+          <div class="row"><span>双击任务标题</span><kbd>编辑名称</kbd></div>
+          <div class="row"><span>回车 / 失焦</span><kbd>保存名称</kbd></div>
+          <div class="row"><span>Esc</span><kbd>取消编辑</kbd></div>
+        </div>
       </div>
     </section>
   </div>
@@ -77,17 +82,24 @@ interface ModeShortcutConfigPayload {
   toggle_mode: string;
 }
 
+interface SystemSettingsPayload {
+  quick_capture_shortcut: string;
+}
+
 const toggleWindowShortcut = ref('Cmd+Shift+T');
 const toggleModeShortcut = ref('Alt+T');
+const quickCaptureShortcut = ref('Alt+Space');
 
 async function loadShortcutLabels() {
   try {
-    const [windowConfig, modeConfig] = await Promise.all([
+    const [windowConfig, modeConfig, systemConfig] = await Promise.all([
       invoke<ShortcutConfigPayload>('get_shortcut_config'),
-      invoke<ModeShortcutConfigPayload>('get_mode_shortcut_config')
+      invoke<ModeShortcutConfigPayload>('get_mode_shortcut_config'),
+      invoke<SystemSettingsPayload>('get_system_settings')
     ]);
     toggleWindowShortcut.value = windowConfig.toggle_window || 'Cmd+Shift+T';
     toggleModeShortcut.value = modeConfig.toggle_mode || 'Alt+T';
+    quickCaptureShortcut.value = systemConfig.quick_capture_shortcut || 'Alt+Space';
   } catch {
     // keep defaults
   }
@@ -105,15 +117,18 @@ onMounted(() => {
   z-index: 70;
   background: rgba(15, 23, 42, 0.24);
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
-  padding: 14px;
+  padding: 12px;
 }
 
 .shortcut-sheet {
   width: min(360px, 100%);
-  max-height: calc(100% - 8px);
-  overflow: auto;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   border-radius: 12px;
   border: 0.5px solid var(--border);
   background: var(--bg-solid);
@@ -121,11 +136,18 @@ onMounted(() => {
   padding: 12px;
 }
 
+.sheet-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
 .sheet-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
+  flex-shrink: 0;
 }
 
 .sheet-header h3 {
@@ -156,14 +178,19 @@ onMounted(() => {
 }
 
 .row {
-  height: 24px;
+  min-height: 24px;
   border-radius: 6px;
-  padding: 0 8px;
+  padding: 3px 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   color: var(--text-primary);
   font-size: 12px;
+}
+
+.row > span {
+  min-width: 0;
 }
 
 .row:hover {

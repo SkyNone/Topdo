@@ -5,7 +5,11 @@
       <div class="hero"><div class="emoji" :style="{ background: `${habit.color}22` }">{{ habit.emoji }}</div><h3>{{ habit.name }}</h3><p>{{ frequencyLabel }}</p></div>
       <div class="stat-row"><div><strong>{{ habit.currentStreak }}</strong><span>当前连续</span></div><div><strong>{{ habit.longestStreak }}</strong><span>最长连续</span></div><div><strong>{{ habit.monthCompletionRate }}%</strong><span>本月完成</span></div></div>
       <div class="calendar"><span v-for="day in monthDays" :key="day.key" :class="{ done: day.done, today: day.today }">{{ day.day }}</span></div>
-      <div class="actions"><button @click="emit('edit')">编辑</button><button @click="emit('archive')">归档</button><button class="danger" @click="emit('delete')">删除</button></div>
+      <div class="actions">
+        <button type="button" @click.stop="emit('edit')">编辑</button>
+        <button type="button" @click.stop="emit('archive')">归档</button>
+        <button type="button" class="danger" @click.stop="emit('delete')">删除</button>
+      </div>
     </div>
   </div>
 </template>

@@ -209,53 +209,33 @@
         <input v-model="quickCaptureShortcutDraft" type="text" class="form-input" placeholder="Alt+Space" />
         <button type="button" class="btn secondary compact" :disabled="busy" @click="onSaveSystemSettings">保存</button>
       </div>
-      <div class="setting-row">
-        <span class="setting-icon green"><Icon name="bell" :size="18" /></span>
-        <div class="setting-text">
-          <p class="setting-name">快速捕获后通知</p>
-        </div>
-        <button type="button" class="btn ghost compact" :disabled="busy" @click="onSendTestNotification">测试</button>
-        <label class="toggle"><input v-model="quickCaptureNotify" type="checkbox" /><span /></label>
-      </div>
     </section>
 
-    <section class="settings-group">
-      <div class="setting-row">
+    <section class="settings-group data-tools-group">
+      <div class="setting-row data-tools-header">
         <span class="setting-icon green"><Icon name="download" :size="18" /></span>
         <div class="setting-text">
           <p class="setting-name">数据导出</p>
         </div>
       </div>
-      <div class="action-row wrap">
-        <button type="button" class="btn secondary" :disabled="busy" @click="onExportData('json')">导出 JSON</button>
-        <button type="button" class="btn secondary" :disabled="busy" @click="onExportData('csv')">导出 CSV</button>
-        <button type="button" class="btn secondary" :disabled="busy" @click="onExportData('markdown')">导出 Markdown</button>
+      <div class="data-tools-body">
+        <div class="export-actions">
+          <button type="button" class="btn secondary compact" :disabled="busy" @click="onExportData('json')">JSON</button>
+          <button type="button" class="btn secondary compact" :disabled="busy" @click="onExportData('csv')">CSV</button>
+          <button type="button" class="btn secondary compact" :disabled="busy" @click="onExportData('markdown')">Markdown</button>
+        </div>
       </div>
       <p v-if="dataActionMessage" class="inline-result" :class="dataActionType">{{ dataActionMessage }}</p>
-      <div class="setting-row">
-        <span class="setting-icon orange"><Icon name="update" :size="18" /></span>
-        <div class="setting-text">
-          <p class="setting-name">自动本地备份</p>
-        </div>
-        <label class="toggle"><input v-model="autoBackup" type="checkbox" /><span /></label>
-      </div>
-      <div class="backup-editor">
-        <label class="backup-retention">
-          <span>保留天数</span>
-          <input v-model.number="backupRetentionDays" min="1" max="90" type="number" class="form-input" />
-        </label>
-        <button type="button" class="btn secondary compact" :disabled="busy" @click="onRunBackupNow">立即备份</button>
-        <button type="button" class="btn ghost compact" :disabled="busy" @click="onOpenBackupFolder">打开文件夹</button>
-      </div>
     </section>
 
     <section class="settings-group">
-      <div class="setting-row">
+      <button type="button" class="setting-row clickable full-row-button" :disabled="busy" @click="onCheckUpdates">
         <span class="setting-icon gray"><Icon name="info" :size="18" /></span>
         <div class="setting-text">
-          <p class="setting-name">Topdo</p>
+          <p class="setting-name">Topdo v2.0</p>
         </div>
-      </div>
+        <Icon name="chevron-right" :size="17" />
+      </button>
       <button type="button" class="setting-row clickable full-row-button" @click="onOpenGitHub">
         <span class="setting-icon gray"><Icon name="github" :size="18" /></span>
         <div class="setting-text">
@@ -310,7 +290,6 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import Icon from './Icon.vue';
@@ -321,7 +300,7 @@ import { useHabitStore } from '../stores/habitStore';
 import { usePetStore } from '../stores/petStore';
 import { useTaskStore } from '../stores/taskStore';
 import { WindowMode } from '../types/pet';
-import { exportDataFile, openBackupFolder, openExportFolder, runDailyBackup, type ExportFormat } from '../services/exportService';
+import { exportDataFile, openExportFolder, type ExportFormat } from '../services/exportService';
 import { clearLogs, formatLogLine, logs } from '../utils/logger';
 import { setThemePreference, useThemeState, type ThemePreference } from '../utils/theme';
 
@@ -385,6 +364,9 @@ interface SystemSettingsPayload {
 
 const GITHUB_REPO_URL = 'https://github.com/SkyNone/Topdo';
 const GITHUB_FEEDBACK_URL = 'https://github.com/SkyNone/Topdo/issues';
+const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/SkyNone/Topdo/releases/latest';
+const GITHUB_LATEST_RELEASE_URL = 'https://github.com/SkyNone/Topdo/releases/latest';
+const APP_VERSION = '2.0.0';
 const FEISHU_TEMPLATE_URL =
   'https://s7wd8lze1s.feishu.cn/base/QR7rbtLf0adg0gsFun7cKnYOnGd?table=tblSeF0WH71ITCe7&view=vewMSNDmR0';
 const FEISHU_TUTORIAL_URL = 'https://open.feishu.cn/app';
@@ -425,9 +407,6 @@ const systemMenuBarEnabled = ref(true);
 const systemCloseToMenuBar = ref(true);
 const systemHideDockIcon = ref(false);
 const quickCaptureShortcutDraft = ref('Alt+Space');
-const quickCaptureNotify = ref(true);
-const autoBackup = ref(true);
-const backupRetentionDays = ref(7);
 const dataActionMessage = ref('');
 const dataActionType = ref<StatusType>('success');
 
@@ -473,6 +452,26 @@ function setStatus(type: StatusType, message: string) {
     statusMessage.value = message;
     statusDetail.value = '';
   }
+}
+
+function normalizeVersion(value: string): number[] {
+  return value
+    .trim()
+    .replace(/^v/i, '')
+    .split('.')
+    .map((item) => Number.parseInt(item, 10))
+    .map((item) => (Number.isFinite(item) ? item : 0));
+}
+
+function compareVersion(a: string, b: string): number {
+  const left = normalizeVersion(a);
+  const right = normalizeVersion(b);
+  const length = Math.max(left.length, right.length, 3);
+  for (let index = 0; index < length; index += 1) {
+    const diff = (left[index] || 0) - (right[index] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 async function loadShortcutConfig() {
@@ -557,16 +556,12 @@ async function loadSystemSettings() {
     systemCloseToMenuBar.value = payload.close_to_menu_bar;
     systemHideDockIcon.value = payload.hide_dock_icon;
     quickCaptureShortcutDraft.value = payload.quick_capture_shortcut || 'Alt+Space';
-    quickCaptureNotify.value = payload.quick_capture_notify;
-    autoBackup.value = payload.auto_backup;
-    backupRetentionDays.value = payload.backup_retention_days || 7;
   } catch (error) {
     setStatus('error', String(error));
   }
 }
 
 async function persistSystemSettings(showMessage = false) {
-  const retentionDays = Math.max(1, Number(backupRetentionDays.value) || 7);
   const payload = await invoke<SystemSettingsPayload>('save_system_settings', {
     menuBarEnabled: systemMenuBarEnabled.value,
     menu_bar_enabled: systemMenuBarEnabled.value,
@@ -576,20 +571,17 @@ async function persistSystemSettings(showMessage = false) {
     hide_dock_icon: systemHideDockIcon.value,
     quickCaptureShortcut: quickCaptureShortcutDraft.value,
     quick_capture_shortcut: quickCaptureShortcutDraft.value,
-    quickCaptureNotify: quickCaptureNotify.value,
-    quick_capture_notify: quickCaptureNotify.value,
-    autoBackup: autoBackup.value,
-    auto_backup: autoBackup.value,
-    backupRetentionDays: retentionDays,
-    backup_retention_days: retentionDays
+    quickCaptureNotify: false,
+    quick_capture_notify: false,
+    autoBackup: false,
+    auto_backup: false,
+    backupRetentionDays: 7,
+    backup_retention_days: 7
   });
   systemMenuBarEnabled.value = payload.menu_bar_enabled;
   systemCloseToMenuBar.value = payload.close_to_menu_bar;
   systemHideDockIcon.value = payload.hide_dock_icon;
   quickCaptureShortcutDraft.value = payload.quick_capture_shortcut || quickCaptureShortcutDraft.value;
-  quickCaptureNotify.value = payload.quick_capture_notify;
-  autoBackup.value = payload.auto_backup;
-  backupRetentionDays.value = payload.backup_retention_days || retentionDays;
   if (showMessage) setStatus('success', '系统级设置已保存');
 }
 
@@ -871,24 +863,34 @@ async function onOpenFeedback() {
   }
 }
 
-async function ensureNotificationPermission() {
-  let granted = await isPermissionGranted();
-  if (!granted) {
-    granted = (await requestPermission()) === 'granted';
-  }
-  return granted;
-}
-
-async function onSendTestNotification() {
+async function onCheckUpdates() {
+  busy.value = true;
+  setStatus('success', '正在检查更新...');
   try {
-    if (!(await ensureNotificationPermission())) {
-      setStatus('error', '系统通知权限未开启，请在 macOS 系统设置中允许 Topdo 发送通知');
-      return;
+    const response = await fetch(GITHUB_RELEASES_API_URL, {
+      headers: { Accept: 'application/vnd.github+json' }
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub 返回 ${response.status}`);
     }
-    sendNotification({ title: 'Topdo 通知测试', body: '如果你看到这条通知，说明通知权限已生效。' });
-    setStatus('success', '测试通知已发送');
+    const release = await response.json() as { tag_name?: string; html_url?: string };
+    const latest = release.tag_name || '';
+    if (!latest) throw new Error('未找到最新版本信息');
+    if (compareVersion(latest, APP_VERSION) > 0) {
+      setStatus('success', `发现新版本 ${latest}，已打开下载页`);
+      if (release.html_url) await open(release.html_url);
+    } else {
+      setStatus('success', `当前已是最新版本：Topdo v${APP_VERSION.replace(/\.0$/, '')}`);
+    }
   } catch (error) {
-    setStatus('error', `发送测试通知失败: ${String(error)}`);
+    try {
+      await open(GITHUB_LATEST_RELEASE_URL);
+      setStatus('error', `自动检查失败，已打开 Release 页面: ${String(error)}`);
+    } catch {
+      setStatus('error', `检查更新失败: ${String(error)}`);
+    }
+  } finally {
+    busy.value = false;
   }
 }
 
@@ -912,31 +914,6 @@ async function onExportData(format: ExportFormat) {
     setStatus('error', `导出失败: ${String(error)}`);
   } finally {
     busy.value = false;
-  }
-}
-
-async function onRunBackupNow() {
-  busy.value = true;
-  try {
-    await ensureExportDataLoaded();
-    const path = await runDailyBackup(taskStore.tasks, habitStore.habits, backupRetentionDays.value);
-    dataActionType.value = 'success';
-    dataActionMessage.value = `已备份：${path}`;
-    setStatus('success', `已备份到 ${path}`);
-  } catch (error) {
-    dataActionType.value = 'error';
-    dataActionMessage.value = `备份失败：${String(error)}`;
-    setStatus('error', `备份失败: ${String(error)}`);
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function onOpenBackupFolder() {
-  try {
-    await openBackupFolder();
-  } catch (error) {
-    setStatus('error', `打开备份文件夹失败: ${String(error)}`);
   }
 }
 
@@ -1020,7 +997,7 @@ watch(
 }
 
 .setting-row {
-  min-height: 58px;
+  min-height: 54px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1080,8 +1057,8 @@ watch(
 
 .setting-name {
   color: var(--text-primary);
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--font-size-base, 13px);
+  line-height: 18px;
   font-weight: 500;
 }
 
@@ -1293,6 +1270,33 @@ watch(
   flex-wrap: wrap;
 }
 
+.data-tools-group {
+  overflow: visible;
+}
+
+.data-tools-header {
+  min-height: 54px;
+  border-bottom: 0;
+}
+
+.data-tools-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 16px 60px;
+}
+
+.export-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.export-actions .btn {
+  width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+}
+
 .shortcut-editor {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1306,30 +1310,8 @@ watch(
   min-width: 0;
 }
 
-.backup-editor {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px 14px 60px;
-  border-top: 1px solid var(--border-light);
-}
-
-.backup-retention {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 16px;
-}
-
-.backup-retention .form-input {
-  max-width: 92px;
-}
-
 .inline-result {
-  margin: 0 16px 12px 60px;
+  margin: 0 16px 16px;
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 12px;

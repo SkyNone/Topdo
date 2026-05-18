@@ -166,9 +166,9 @@ struct SystemConfig {
   hide_dock_icon: bool,
   #[serde(default = "default_quick_capture_shortcut")]
   quick_capture_shortcut: String,
-  #[serde(default = "default_true")]
+  #[serde(default)]
   quick_capture_notify: bool,
-  #[serde(default = "default_true")]
+  #[serde(default)]
   auto_backup: bool,
   #[serde(default = "default_backup_retention_days")]
   backup_retention_days: i64,
@@ -181,8 +181,8 @@ impl Default for SystemConfig {
       close_to_menu_bar: default_true(),
       hide_dock_icon: false,
       quick_capture_shortcut: default_quick_capture_shortcut(),
-      quick_capture_notify: default_true(),
-      auto_backup: default_true(),
+      quick_capture_notify: false,
+      auto_backup: false,
       backup_retention_days: default_backup_retention_days(),
     }
   }
@@ -2635,10 +2635,12 @@ fn create_system_windows(app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 fn shortcut_conflict_label(shortcut: &tauri_plugin_global_shortcut::Shortcut) -> Option<&'static str> {
-  const RESERVED: [(&str, &str); 9] = [
+    const RESERVED: [(&str, &str); 11] = [
     ("Cmd+N", "新建任务"),
     ("Cmd+,", "打开设置"),
     ("Cmd+K", "快捷键面板"),
+    ("Cmd+F", "搜索任务"),
+    ("Cmd+J", "任务 / 习惯切换"),
     ("Cmd+1", "筛选：待办"),
     ("Cmd+2", "筛选：进行中"),
     ("Cmd+3", "筛选：已完成"),

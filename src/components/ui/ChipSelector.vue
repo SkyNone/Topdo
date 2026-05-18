@@ -28,7 +28,7 @@ export interface ChipOption {
 withDefaults(defineProps<{
   options: ChipOption[];
   modelValue: ChipValue;
-  tone?: 'blue' | 'purple' | 'amber' | 'neutral';
+  tone?: 'blue' | 'purple' | 'amber' | 'red' | 'neutral';
   compact?: boolean;
 }>(), {
   tone: 'blue',
@@ -61,6 +61,12 @@ const emit = defineEmits<{ (event: 'update:modelValue', value: ChipValue): void 
   --chip-active-bg: var(--accent-amber-soft);
   --chip-active-border: var(--accent-amber);
   --chip-active-text: var(--accent-amber);
+}
+
+.chip-selector--red {
+  --chip-active-bg: var(--accent-red-soft);
+  --chip-active-border: var(--accent-red);
+  --chip-active-text: var(--accent-red);
 }
 
 .chip-selector--neutral {

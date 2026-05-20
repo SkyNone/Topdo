@@ -45,6 +45,12 @@ function dateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function todayTimeTimestamp(date: Date, time: string): number {
+  const [hour, minute] = time.split(':').map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minute).getTime();
+}
+
 function reminderTitle(minutes: number): string {
   if (minutes === 0) return '现在截止';
   if (minutes === 15) return '15分钟后截止';
@@ -70,7 +76,7 @@ export function startReminderService(
       const due = dueTimestamp(task.due_date);
       if (!due) continue;
       const reminder = due - Number(task.reminder_before) * 60_000;
-      const shouldNotify = (now >= reminder && now <= reminder + 120_000) || now > due;
+      const shouldNotify = now >= reminder;
       if (!shouldNotify) continue;
       const title = now > due ? '任务已逾期' : reminderTitle(Number(task.reminder_before));
       const systemTitle = `Topdo · ${now > due ? '已逾期' : reminderTitle(Number(task.reminder_before))}`;
@@ -116,14 +122,15 @@ export function startHabitReminderService(getHabits: () => Habit[], getLogs: () 
   const checkHabitReminders = async () => {
     const canSendSystemNotification = await ensurePermission();
     const now = new Date();
-    const currentTime = now.toTimeString().slice(0, 5);
     const today = dateKey(now);
     for (const habit of getHabits()) {
-      if (habit.is_archived || !habit.remind_time || habit.remind_time !== currentTime) continue;
+      if (habit.is_archived || !habit.remind_time) continue;
       if (!isHabitRequiredDay(now, habit)) continue;
       if (getLogs().some((log) => log.habit_id === habit.id && log.checked_at === today)) continue;
-      const key = `${habit.id}:${today}:${currentTime}`;
+      const key = `${habit.id}:${today}:${habit.remind_time}`;
       if (habitNotifiedKeys.has(key)) continue;
+      const remindAt = todayTimeTimestamp(now, habit.remind_time);
+      if (!remindAt || now.getTime() < remindAt) continue;
       habitNotifiedKeys.add(key);
       const body = `${habit.emoji} ${habit.name}`;
       if (canSendSystemNotification) {
@@ -134,7 +141,7 @@ export function startHabitReminderService(getHabits: () => Habit[], getLogs: () 
         }
       }
       onInAppReminder?.({
-        id: `habit:${habit.id}:${today}:${currentTime}`,
+        id: `habit:${habit.id}:${today}:${habit.remind_time}`,
         kind: 'habit',
         tone: 'habit',
         title: '该打卡了',

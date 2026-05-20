@@ -769,19 +769,20 @@ fn upsert_task(conn: &Connection, task: &Task) -> Result<(), String> {
       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
       ON CONFLICT(record_id) DO UPDATE SET
         id=excluded.id,
-        name=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.name ELSE excluded.name END,
-        status=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.status ELSE excluded.status END,
-        priority=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.priority ELSE excluded.priority END,
-        task_type=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.task_type ELSE excluded.task_type END,
-        time_spent=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.time_spent ELSE excluded.time_spent END,
+        name=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.name ELSE excluded.name END,
+        status=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.status ELSE excluded.status END,
+        priority=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.priority ELSE excluded.priority END,
+        task_type=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.task_type ELSE excluded.task_type END,
+        time_spent=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.time_spent ELSE excluded.time_spent END,
         created_at=excluded.created_at,
         updated_at=excluded.updated_at,
         completed_at=CASE
+          WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.completed_at
           WHEN excluded.status NOT LIKE '%已完成%' THEN excluded.completed_at
           WHEN excluded.completed_at != '' THEN excluded.completed_at
           ELSE COALESCE(tasks.completed_at, '')
         END,
-        notes=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.notes ELSE excluded.notes END,
+        notes=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.notes ELSE excluded.notes END,
         sort_order=excluded.sort_order,
         sub_tasks=CASE WHEN excluded.source = 'feishu' AND excluded.sub_tasks = '[]' THEN tasks.sub_tasks ELSE excluded.sub_tasks END,
         due_date=CASE WHEN excluded.source = 'feishu' AND excluded.due_date = '' THEN tasks.due_date ELSE excluded.due_date END,
@@ -792,11 +793,11 @@ fn upsert_task(conn: &Connection, task: &Task) -> Result<(), String> {
         reminder_notified=CASE WHEN excluded.source = 'feishu' AND excluded.reminder_before IS NULL THEN tasks.reminder_notified ELSE excluded.reminder_notified END,
         source=excluded.source,
         feishu_record_id=excluded.feishu_record_id,
-        sync_status=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.sync_status ELSE excluded.sync_status END,
+        sync_status=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.sync_status ELSE excluded.sync_status END,
         last_synced_at=excluded.last_synced_at,
-        retry_count=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.retry_count ELSE excluded.retry_count END,
-        last_error=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.last_error ELSE excluded.last_error END,
-        last_retry_at=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status = 'pending' AND excluded.source = 'feishu' THEN tasks.last_retry_at ELSE excluded.last_retry_at END",
+        retry_count=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.retry_count ELSE excluded.retry_count END,
+        last_error=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.last_error ELSE excluded.last_error END,
+        last_retry_at=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.last_retry_at ELSE excluded.last_retry_at END",
       params![
         task.record_id,
         task.id,
@@ -1869,7 +1870,7 @@ async fn db_prune_stale_feishu_tasks(app: AppHandle, remote_ids: Vec<String>) ->
     if remote_ids.is_empty() {
       conn
         .execute(
-          "DELETE FROM tasks WHERE source = 'feishu' AND sync_status != 'pending'",
+          "DELETE FROM tasks WHERE source = 'feishu' AND sync_status NOT IN ('pending', 'failed')",
           [],
         )
         .map_err(|err| format!("prune stale feishu tasks failed: {err}"))?;
@@ -1880,7 +1881,7 @@ async fn db_prune_stale_feishu_tasks(app: AppHandle, remote_ids: Vec<String>) ->
     let sql = format!(
       "DELETE FROM tasks
        WHERE source = 'feishu'
-         AND sync_status != 'pending'
+         AND sync_status NOT IN ('pending', 'failed')
          AND record_id NOT IN ({})",
       placeholders
     );
@@ -3813,10 +3814,13 @@ async fn update_task(
     Err(err) => {
       let retryable = !is_non_retryable_sync_error(&err);
       let _ = db_mark_push_result(app.clone(), record_id.clone(), err.clone(), retryable).await;
-      let _ = db_update_field_pending(app, record_id, field_name, value).await;
       Ok(UpdateTaskResult {
         success: false,
-        message: format!("离线缓存，待重试：{err}"),
+        message: if retryable {
+          format!("离线缓存，待重试：{err}")
+        } else {
+          format!("同步失败，请检查飞书配置或字段：{err}")
+        },
       })
     }
   }

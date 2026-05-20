@@ -57,6 +57,7 @@ interface CreateTaskInput {
 const FEISHU_RECORDS_URL = '/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records';
 const FEISHU_UPDATE_URL = '/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}';
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
+const localStatusSaveQueue = new Map<string, Promise<void>>();
 
 function nowUnixSecondsString(): string {
   return Math.floor(Date.now() / 1000).toString();
@@ -125,6 +126,14 @@ function toFeishuPriority(priority: string): string {
 function normalizePriority(priority: string): string {
   const value = (priority || '').trim();
   return fromFeishuPriority(value);
+}
+
+function failedSyncPatch(message: string): Partial<Task> {
+  const retryable = message.includes('待重试') || message.includes('离线缓存');
+  return {
+    sync_status: retryable ? 'pending' : 'failed',
+    last_error: message
+  };
 }
 
 function findTaskByRecordId(tasks: Task[], recordId: string): Task | undefined {
@@ -803,7 +812,7 @@ export const useTaskStore = defineStore('task', {
 
       const fromStatus = target.status;
       const previous = { ...target };
-      const previousTasks = [...this.tasks];
+      const previousTasks = this.tasks.map((task) => ({ ...task }));
       log('STATUS', '切换状态', { taskId: recordId, from: fromStatus, to: toStatus });
 
       this.moveTaskToStatusTail(recordId, toStatus);
@@ -824,6 +833,38 @@ export const useTaskStore = defineStore('task', {
           this.tasks.unshift(current);
         }
       }
+      if (this.mode === 'local') {
+        this.statusSyncState[recordId] = 'success';
+
+        const id = target.id || target.record_id;
+        const previousQueue = localStatusSaveQueue.get(recordId) || Promise.resolve();
+        const saveTask = previousQueue
+          .catch(() => undefined)
+          .then(async () => {
+            await invoke<Task>('update_local_task', {
+              id,
+              fields: { status: normalizedStatus }
+            });
+          })
+          .catch((error) => {
+            const latest = this.tasks.find((task) => task.record_id === recordId || task.id === recordId);
+            if (latest && normalizeStatus(latest.status) === normalizeStatus(normalizedStatus)) {
+              this.tasks = previousTasks;
+              this.statusSyncState[recordId] = 'error';
+              this.error = `状态保存失败：${String(error)}`;
+            }
+            log('API', '本地状态保存失败', { error: String(error) });
+          })
+          .finally(() => {
+            if (localStatusSaveQueue.get(recordId) === saveTask) {
+              localStatusSaveQueue.delete(recordId);
+            }
+          });
+
+        localStatusSaveQueue.set(recordId, saveTask);
+        return;
+      }
+
       this.statusSyncState[recordId] = 'loading';
 
       const tryUpdateRemoteStatus = async (remoteRecordId: string) => {
@@ -865,21 +906,6 @@ export const useTaskStore = defineStore('task', {
       };
 
       try {
-        if (this.mode === 'local') {
-          const updated = await invoke<Task>('update_local_task', {
-            id: target.id || target.record_id,
-            fields: { status: toStatus }
-          });
-          this.setTaskPatch(recordId, {
-            ...updated,
-            record_id: updated.record_id || recordId,
-            id: updated.id || updated.record_id || recordId,
-            sync_status: 'synced'
-          });
-          this.statusSyncState[recordId] = 'success';
-          return;
-        }
-
         let result = await tryUpdateRemoteStatus(target.record_id);
 
         if (!result.success && isRecordIdNotFound(result.message || '')) {
@@ -897,7 +923,16 @@ export const useTaskStore = defineStore('task', {
           }
         }
 
-        if (!result.success) throw new Error(result.message || '飞书更新失败');
+        if (!result.success) {
+          const message = result.message || '飞书更新失败';
+          const patch = failedSyncPatch(message);
+          this.setTaskPatch(recordId, patch);
+          this.statusSyncState[recordId] = patch.sync_status === 'failed' ? 'error' : 'pending';
+          this.offlineMode = true;
+          this.error = message;
+          if (patch.sync_status === 'pending') this.scheduleSyncAfterWrite();
+          return;
+        }
 
         this.setTaskPatch(recordId, { sync_status: 'synced' });
         this.statusSyncState[recordId] = 'success';
@@ -993,7 +1028,16 @@ export const useTaskStore = defineStore('task', {
           }
         }
 
-        if (!result.success) throw new Error(result.message || '飞书保存失败');
+        if (!result.success) {
+          const message = result.message || '飞书保存失败';
+          const patch = failedSyncPatch(message);
+          this.setTaskPatch(recordId, patch);
+          this.notesSyncState[recordId] = patch.sync_status === 'failed' ? 'error' : 'pending';
+          this.offlineMode = true;
+          this.error = message;
+          if (patch.sync_status === 'pending') this.scheduleSyncAfterWrite();
+          return;
+        }
 
         this.setTaskPatch(recordId, { sync_status: 'synced' });
         this.notesSyncState[recordId] = 'success';
@@ -1068,7 +1112,15 @@ export const useTaskStore = defineStore('task', {
           }
         }
 
-        if (!result.success) throw new Error(result.message || '飞书保存失败');
+        if (!result.success) {
+          const message = result.message || '飞书保存失败';
+          const patch = failedSyncPatch(message);
+          this.setTaskPatch(recordId, patch);
+          this.offlineMode = true;
+          this.error = message;
+          if (patch.sync_status === 'pending') this.scheduleSyncAfterWrite();
+          return;
+        }
 
         this.setTaskPatch(recordId, { sync_status: 'synced' });
         this.offlineMode = false;
@@ -1141,7 +1193,16 @@ export const useTaskStore = defineStore('task', {
           }
         }
 
-        if (!result.success) throw new Error(result.message || '飞书保存失败');
+        if (!result.success) {
+          const message = result.message || '飞书保存失败';
+          const patch = failedSyncPatch(message);
+          this.setTaskPatch(recordId, patch);
+          this.tasks = sortTasksByPolicy(this.tasks);
+          this.offlineMode = true;
+          this.error = message;
+          if (patch.sync_status === 'pending') this.scheduleSyncAfterWrite();
+          return;
+        }
 
         this.setTaskPatch(recordId, { sync_status: 'synced' });
         this.tasks = sortTasksByPolicy(this.tasks);
@@ -1236,7 +1297,14 @@ export const useTaskStore = defineStore('task', {
               fields
             );
           } catch (error) {
+            this.tasks = this.tasks.filter((task) => task.record_id !== normalizedCreated.record_id);
+            try {
+              await invoke<boolean>('delete_local_task', { id: normalizedCreated.id || normalizedCreated.record_id });
+            } catch (deleteError) {
+              log('API', '本地新任务回滚删除失败', { error: String(deleteError) });
+            }
             log('API', '本地新任务附加字段保存失败', { error: String(error) });
+            throw error;
           }
         }
         return created.record_id;
@@ -1291,20 +1359,27 @@ export const useTaskStore = defineStore('task', {
 
         const syncField = async (fieldName: string, value: string) => {
           const fieldValue = fieldName === '优先级' ? toFeishuPriority(value) : value;
-          await invoke<UpdateTaskResult>('update_task', {
+          const fieldResult = await invoke<UpdateTaskResult>('update_task', {
             recordId: result.record_id,
             record_id: result.record_id,
             fieldName,
             field_name: fieldName,
             value: fieldValue
           });
+          if (!fieldResult.success) throw new Error(fieldResult.message || `${fieldName} 同步失败`);
         };
 
         try {
           await syncField('优先级', feishuPriority);
           if (normalizedStatus && normalizedStatus !== '待处理') await syncField('状态', normalizedStatus);
         } catch (error) {
-          log('API', '飞书报错', { error: `新任务字段同步失败: ${String(error)}` });
+          const message = `新任务字段同步失败：${String(error)}`;
+          const patch = failedSyncPatch(message);
+          this.setTaskPatch(result.record_id, patch);
+          this.offlineMode = true;
+          this.error = message;
+          if (patch.sync_status === 'pending') this.scheduleSyncAfterWrite();
+          log('API', '飞书报错', { error: message });
         }
 
         if (result.synced) {

@@ -223,6 +223,8 @@ import { startHabitReminderService, startReminderService, type InAppReminder } f
 import { initializeTheme, toggleThemeQuickly, useThemeState } from './utils/theme';
 
 type ViewType = 'welcome' | 'main' | 'settings';
+const NORMAL_MIN_WIDTH = 320;
+const NORMAL_MIN_HEIGHT = 300;
 
 interface WindowStatePayload {
   mini_mode: boolean;
@@ -567,12 +569,14 @@ async function onTogglePin() {
 async function onEnterMiniMode() {
   try {
     shortcutSheetVisible.value = false;
-    await invoke('set_window_mode', { mode: 'cat' });
     isMiniMode.value = true;
     petStore.windowMode = WindowMode.Cat;
+    await invoke('set_window_mode', { mode: 'cat' });
     await petStore.save();
     await applyPetPosition();
   } catch (error) {
+    isMiniMode.value = false;
+    petStore.windowMode = WindowMode.Panel;
     showError(String(error));
   }
 }
@@ -621,6 +625,15 @@ function clearMiniDragListeners() {
     window.removeEventListener('mouseup', miniMouseUpHandler);
     miniMouseUpHandler = null;
   }
+  window.removeEventListener('blur', cancelMiniInteraction);
+  document.removeEventListener('mouseleave', cancelMiniInteraction);
+}
+
+function cancelMiniInteraction() {
+  clearMiniDragListeners();
+  miniStartPoint = null;
+  miniPressed.value = false;
+  miniDragging.value = false;
 }
 
 function onMiniMouseDown(event: MouseEvent) {
@@ -636,9 +649,20 @@ function onMiniMouseDown(event: MouseEvent) {
     const dy = moveEvent.clientY - miniStartPoint.y;
     if (Math.hypot(dx, dy) < 3) return;
     miniDragging.value = true;
-    void appWindow.startDragging().catch((error) => {
-      showError(String(error));
-    });
+    clearMiniDragListeners();
+    void appWindow
+      .startDragging()
+      .catch((error) => {
+        showError(String(error));
+      })
+      .finally(() => {
+        window.setTimeout(() => {
+          miniStartPoint = null;
+          miniPressed.value = false;
+          miniDragging.value = false;
+          void persistPetPosition();
+        }, 120);
+      });
   };
 
   miniMouseUpHandler = () => {
@@ -658,6 +682,8 @@ function onMiniMouseDown(event: MouseEvent) {
 
   window.addEventListener('mousemove', miniMouseMoveHandler);
   window.addEventListener('mouseup', miniMouseUpHandler);
+  window.addEventListener('blur', cancelMiniInteraction);
+  document.addEventListener('mouseleave', cancelMiniInteraction);
 }
 
 async function onHideToTray() {
@@ -936,8 +962,11 @@ onMounted(async () => {
   });
   try {
     const savedSize = await invoke<WindowSizePayload | null>('get_window_size');
-    if (savedSize && savedSize.width > 0 && savedSize.height > 0) {
-      await appWindow.setSize(new LogicalSize(savedSize.width, savedSize.height));
+    if (!isMiniMode.value && savedSize && savedSize.width > 0 && savedSize.height > 0) {
+      await appWindow.setSize(new LogicalSize(
+        Math.max(savedSize.width, NORMAL_MIN_WIDTH),
+        Math.max(savedSize.height, NORMAL_MIN_HEIGHT)
+      ));
     }
   } catch (error) {
     console.warn('恢复窗口尺寸失败:', error);
@@ -950,9 +979,10 @@ onMounted(async () => {
 
     resizeTimer = setTimeout(async () => {
       try {
+        if (isMiniMode.value) return;
         await invoke('save_window_size', {
-          width: size.width,
-          height: size.height
+          width: Math.max(size.width, NORMAL_MIN_WIDTH),
+          height: Math.max(size.height, NORMAL_MIN_HEIGHT)
         });
       } catch (error) {
         console.warn('保存窗口尺寸失败:', error);
@@ -1044,10 +1074,11 @@ watch(
 
 watch(
   () => petStore.enabled,
-  (enabled) => {
-    if (!enabled && isMiniMode.value) {
-      void restoreNormalMode();
-    }
+  () => {
+    if (!isMiniMode.value) return;
+    void invoke('set_window_mode', { mode: 'cat' }).catch((error) => {
+      showError(String(error));
+    });
   }
 );
 

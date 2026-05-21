@@ -58,10 +58,11 @@ onBeforeUnmount(() => document.removeEventListener('click', close));
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-width: 104px;
+  max-width: 100%;
+  min-width: 0;
   height: 30px;
   justify-content: center;
-  padding: 0 12px;
+  padding: 0 10px;
   border-radius: 10px;
   cursor: default;
   -webkit-app-region: no-drag;
@@ -75,6 +76,13 @@ onBeforeUnmount(() => document.removeEventListener('click', close));
   align-items: center;
   gap: 5px;
   min-width: 0;
+}
+
+.mode-title__label span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dropdown-arrow {
   color: var(--text-tertiary);

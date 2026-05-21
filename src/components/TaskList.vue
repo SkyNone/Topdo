@@ -32,14 +32,21 @@
       </div>
     </div>
 
-    <div v-else class="task-list">
+    <div v-else class="task-list" :class="{ dragging: Boolean(draggingTaskId) }">
+      <div v-if="draggingTaskId" class="drag-guidance">按住手柄排序，仅调整当前优先级分组内顺序</div>
       <div
         v-for="group in groupedTasks"
         :key="group.key"
         class="task-group"
-        :class="{ 'drag-over': draggingTaskId && dragOverGroup === group.key && group.droppable }"
-        @dragover.prevent="group.droppable && onGroupDragOver(group.key)"
-        @drop.prevent="group.droppable && onDropOnGroup(group.priority)"
+        :data-group-key="group.key"
+        :data-group-priority="group.priority"
+        :data-droppable="group.droppable ? 'true' : 'false'"
+        :class="{
+          'drag-over': canDropInGroup(group) && dragOverGroup === group.key,
+          'drag-disabled': draggingTaskId && group.droppable && !canDropInGroup(group)
+        }"
+        @dragover.prevent="canDropInGroup(group) && onGroupDragOver(group, $event)"
+        @drop.prevent="canDropInGroup(group) && onDropOnGroup(group.priority)"
       >
         <div class="task-group__header">
           <span>{{ group.label }}</span>
@@ -48,18 +55,33 @@
         <div
           v-for="task in group.tasks"
           :key="task.record_id"
-          draggable="true"
+          :data-task-id="task.record_id"
           class="task-draggable"
           :class="{
             dragging: draggingTaskId === task.record_id,
+            'pointer-dragging': pointerDragActive && draggingTaskId === task.record_id,
             'drop-before': dragOverTaskId === task.record_id && dragOverPlacement === 'before',
             'drop-after': dragOverTaskId === task.record_id && dragOverPlacement === 'after'
           }"
-          @dragstart="onDragStart(task, $event)"
-          @dragend="onDragEnd"
-          @dragover.prevent.stop="group.droppable && onTaskDragOver(group.key, task.record_id, $event)"
-          @drop.prevent.stop="group.droppable && onDropOnTask(group.priority, task.record_id)"
+          @click.capture="onTaskPointerClickCapture(task.record_id, $event)"
+          @dragover.prevent.stop="canDropInGroup(group) && onTaskDragOver(group, task.record_id, $event)"
+          @drop.prevent.stop="canDropInGroup(group) && onDropOnTask(group, task.record_id)"
         >
+          <div
+            v-if="group.droppable"
+            role="button"
+            tabindex="0"
+            class="task-drag-handle"
+            title="拖动调整当前分组内顺序"
+            aria-label="拖动调整当前分组内顺序"
+            @click.stop
+            @pointerdown.stop="onHandlePointerDown(task, group, $event)"
+            @mousedown.stop="onHandleMouseDown(task, group, $event)"
+          >
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
           <TaskItem
             :ref="(el) => setTaskItemRef(task.record_id, el)"
             :task="task"
@@ -72,13 +94,22 @@
             @request-delete="emit('request-delete', $event)"
           />
         </div>
+        <div
+          v-if="canDropInGroup(group)"
+          class="task-drop-tail"
+          :class="{ active: isGroupTailActive(group) }"
+          @dragover.prevent="onGroupTailDragOver(group, $event)"
+          @drop.prevent="onDropOnGroup(group.priority)"
+        >
+          <span>{{ group.tasks.length ? `放到${group.label}末尾` : `放到${group.label}` }}</span>
+        </div>
       </div>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useTaskStore } from '../stores/taskStore';
 import type { SyncState } from '../stores/taskStore';
 import type { RecurrenceRule, Task } from '../types';
@@ -124,10 +155,20 @@ const store = useTaskStore();
 const displayedTasks = computed(() => store.filteredTasks);
 const focusedTaskId = ref<string>('');
 const draggingTaskId = ref('');
+const dragSourceGroupKey = ref('');
+const dragSourcePriority = ref('');
 const dragOverGroup = ref('');
 const dragOverTaskId = ref('');
 const dragOverPlacement = ref<'before' | 'after'>('before');
+const pointerDragActive = ref(false);
 const itemRefs = new Map<string, any>();
+const DRAG_ACTIVATION_DISTANCE = 6;
+let pointerDragMoved = false;
+let pointerStartX = 0;
+let pointerStartY = 0;
+let pointerDropPriority = '';
+let suppressClickTaskId = '';
+let suppressClickUntil = 0;
 
 const starterTemplates = computed(() => [
   {
@@ -173,6 +214,14 @@ const priorityGroups = [
   { key: 'important', priority: '重要', label: '重要' },
   { key: 'normal', priority: '普通', label: '普通' }
 ];
+
+type TaskGroup = {
+  key: string;
+  priority: string;
+  label: string;
+  droppable: boolean;
+  tasks: Task[];
+};
 
 const groupedTasks = computed(() => {
   const groups = priorityGroups
@@ -301,33 +350,92 @@ async function openTask(recordId: string) {
   itemRefs.get(recordId)?.openFromReminder?.();
 }
 
-function onDragStart(task: Task, event: DragEvent) {
-  if (normalizeTaskStatus(task.status) === 'completed') {
-    event.preventDefault();
-    return;
-  }
+function canDropInGroup(group: TaskGroup): boolean {
+  return Boolean(draggingTaskId.value && group.droppable && dragSourceGroupKey.value === group.key);
+}
+
+function canDropOnGroupElement(group: HTMLElement): boolean {
+  return Boolean(
+    draggingTaskId.value
+      && group.dataset.droppable === 'true'
+      && group.dataset.groupKey === dragSourceGroupKey.value
+  );
+}
+
+function startHandleDrag(task: Task, group: TaskGroup) {
   draggingTaskId.value = task.record_id;
-  event.dataTransfer?.setData('text/plain', task.record_id);
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move';
-  }
+  dragSourceGroupKey.value = group.key;
+  dragSourcePriority.value = group.priority;
+  dragOverGroup.value = group.key;
+  pointerDropPriority = group.priority;
 }
 
 function onDragEnd() {
   draggingTaskId.value = '';
+  dragSourceGroupKey.value = '';
+  dragSourcePriority.value = '';
   dragOverGroup.value = '';
   dragOverTaskId.value = '';
   dragOverPlacement.value = 'before';
+  pointerDragActive.value = false;
+  pointerDragMoved = false;
+  pointerDropPriority = '';
 }
 
-function onGroupDragOver(groupKey: string) {
-  dragOverGroup.value = groupKey;
+function resolveGroupDropTarget(groupElement: HTMLElement): { recordId: string; placement: 'before' | 'after' } | null {
+  const items = Array.from(groupElement.querySelectorAll<HTMLElement>('.task-draggable[data-task-id]'))
+    .filter((item) => item.dataset.taskId && item.dataset.taskId !== draggingTaskId.value);
+  if (items.length === 0) return null;
+
+  for (const item of items) {
+    const rect = item.getBoundingClientRect();
+    if (lastDragClientY.value < rect.top + rect.height / 2) {
+      return { recordId: item.dataset.taskId || '', placement: 'before' };
+    }
+  }
+
+  const last = items[items.length - 1];
+  return { recordId: last.dataset.taskId || '', placement: 'after' };
+}
+
+const lastDragClientY = ref(0);
+
+function onGroupDragOver(group: TaskGroup, event: DragEvent) {
+  if (!canDropInGroup(group)) return;
+  dragOverGroup.value = group.key;
+  pointerDropPriority = group.priority;
+  lastDragClientY.value = event.clientY;
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    dragOverTaskId.value = '';
+    return;
+  }
+
+  const dropTarget = resolveGroupDropTarget(target);
+  if (!dropTarget) {
+    dragOverTaskId.value = '';
+    return;
+  }
+
+  dragOverTaskId.value = dropTarget.recordId;
+  dragOverPlacement.value = dropTarget.placement;
+}
+
+function onGroupTailDragOver(group: TaskGroup, event: DragEvent) {
+  if (!canDropInGroup(group)) return;
+  dragOverGroup.value = group.key;
+  pointerDropPriority = group.priority;
   dragOverTaskId.value = '';
+  dragOverPlacement.value = 'after';
+  lastDragClientY.value = event.clientY;
 }
 
-function onTaskDragOver(groupKey: string, recordId: string, event: DragEvent) {
-  dragOverGroup.value = groupKey;
+function onTaskDragOver(group: TaskGroup, recordId: string, event: DragEvent) {
+  if (!canDropInGroup(group)) return;
+  dragOverGroup.value = group.key;
+  pointerDropPriority = group.priority;
   dragOverTaskId.value = recordId;
+  lastDragClientY.value = event.clientY;
   const target = event.currentTarget;
   if (!(target instanceof HTMLElement)) {
     dragOverPlacement.value = 'before';
@@ -337,10 +445,155 @@ function onTaskDragOver(groupKey: string, recordId: string, event: DragEvent) {
   dragOverPlacement.value = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
 }
 
-async function onDropOnGroup(priority: string) {
-  if (!draggingTaskId.value) return;
+function findDroppableGroupFromPoint(x: number, y: number): HTMLElement | null {
+  const element = document.elementFromPoint(x, y);
+  const group = element?.closest<HTMLElement>('.task-group[data-droppable="true"]') || null;
+  if (!group || !canDropOnGroupElement(group)) return null;
+  return group;
+}
+
+function updatePointerDropTarget(event: PointerEvent | MouseEvent) {
+  lastDragClientY.value = event.clientY;
+  const group = findDroppableGroupFromPoint(event.clientX, event.clientY);
+  if (!group) {
+    dragOverGroup.value = '';
+    dragOverTaskId.value = '';
+    pointerDropPriority = '';
+    return;
+  }
+
+  dragOverGroup.value = group.dataset.groupKey || '';
+  pointerDropPriority = group.dataset.groupPriority || '';
+
+  const taskElement = document
+    .elementFromPoint(event.clientX, event.clientY)
+    ?.closest<HTMLElement>('.task-draggable[data-task-id]');
+  if (taskElement?.dataset.taskId && taskElement.dataset.taskId !== draggingTaskId.value) {
+    const rect = taskElement.getBoundingClientRect();
+    dragOverTaskId.value = taskElement.dataset.taskId;
+    dragOverPlacement.value = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+    return;
+  }
+
+  const dropTarget = resolveGroupDropTarget(group);
+  if (!dropTarget) {
+    dragOverTaskId.value = '';
+    return;
+  }
+  dragOverTaskId.value = dropTarget.recordId;
+  dragOverPlacement.value = dropTarget.placement;
+}
+
+function beginPointerDrag(task: Task, group: TaskGroup, event: PointerEvent | MouseEvent) {
+  if (event.button !== 0 || normalizeTaskStatus(task.status) === 'completed') return;
+  event.preventDefault();
+  removePointerListeners();
+  startHandleDrag(task, group);
+  pointerDragActive.value = true;
+  pointerDragMoved = false;
+  pointerStartX = event.clientX;
+  pointerStartY = event.clientY;
+  lastDragClientY.value = event.clientY;
+  updatePointerDropTarget(event);
+
+  const target = event.currentTarget;
+  if (target instanceof HTMLElement && 'pointerId' in event) {
+    target.setPointerCapture?.(event.pointerId);
+  }
+  window.addEventListener('pointermove', onHandlePointerMove, { passive: false });
+  window.addEventListener('pointerup', onHandlePointerUp);
+  window.addEventListener('pointercancel', onHandlePointerCancel);
+  window.addEventListener('mousemove', onHandleMouseMove, { passive: false });
+  window.addEventListener('mouseup', onHandleMouseUp);
+  document.addEventListener('pointermove', onHandlePointerMove, { passive: false });
+  document.addEventListener('pointerup', onHandlePointerUp);
+  document.addEventListener('pointercancel', onHandlePointerCancel);
+  document.addEventListener('mousemove', onHandleMouseMove, { passive: false });
+  document.addEventListener('mouseup', onHandleMouseUp);
+  window.addEventListener('blur', onHandlePointerCancel);
+  document.addEventListener('visibilitychange', onDocumentVisibilityChange);
+}
+
+function onHandlePointerDown(task: Task, group: TaskGroup, event: PointerEvent) {
+  beginPointerDrag(task, group, event);
+}
+
+function onHandleMouseDown(task: Task, group: TaskGroup, event: MouseEvent) {
+  if (pointerDragActive.value) return;
+  beginPointerDrag(task, group, event);
+}
+
+function onTaskPointerClickCapture(recordId: string, event: MouseEvent) {
+  if (recordId !== suppressClickTaskId || Date.now() > suppressClickUntil) return;
+  event.preventDefault();
+  event.stopPropagation();
+  suppressClickTaskId = '';
+}
+
+function onHandlePointerMove(event: PointerEvent) {
+  if (!pointerDragActive.value || !draggingTaskId.value) return;
+  event.preventDefault();
+  const distance = Math.hypot(event.clientX - pointerStartX, event.clientY - pointerStartY);
+  if (distance >= DRAG_ACTIVATION_DISTANCE) pointerDragMoved = true;
+  updatePointerDropTarget(event);
+}
+
+function onHandleMouseMove(event: MouseEvent) {
+  if (!pointerDragActive.value || !draggingTaskId.value) return;
+  event.preventDefault();
+  const distance = Math.hypot(event.clientX - pointerStartX, event.clientY - pointerStartY);
+  if (distance >= DRAG_ACTIVATION_DISTANCE) pointerDragMoved = true;
+  updatePointerDropTarget(event);
+}
+
+function removePointerListeners() {
+  window.removeEventListener('pointermove', onHandlePointerMove);
+  window.removeEventListener('pointerup', onHandlePointerUp);
+  window.removeEventListener('pointercancel', onHandlePointerCancel);
+  window.removeEventListener('mousemove', onHandleMouseMove);
+  window.removeEventListener('mouseup', onHandleMouseUp);
+  document.removeEventListener('pointermove', onHandlePointerMove);
+  document.removeEventListener('pointerup', onHandlePointerUp);
+  document.removeEventListener('pointercancel', onHandlePointerCancel);
+  document.removeEventListener('mousemove', onHandleMouseMove);
+  document.removeEventListener('mouseup', onHandleMouseUp);
+  window.removeEventListener('blur', onHandlePointerCancel);
+  document.removeEventListener('visibilitychange', onDocumentVisibilityChange);
+}
+
+function onHandlePointerCancel() {
+  removePointerListeners();
+  onDragEnd();
+}
+
+function onDocumentVisibilityChange() {
+  if (document.hidden) {
+    onHandlePointerCancel();
+  }
+}
+
+async function onHandlePointerUp(event: PointerEvent) {
+  removePointerListeners();
+  if (!pointerDragActive.value || !draggingTaskId.value || !pointerDragMoved) {
+    onDragEnd();
+    return;
+  }
+
+  updatePointerDropTarget(event);
+  const sourceId = draggingTaskId.value;
+  const targetPriority = pointerDropPriority;
+  const targetRecordId = dragOverTaskId.value;
+  const placement = dragOverPlacement.value;
+  suppressClickTaskId = sourceId;
+  suppressClickUntil = Date.now() + 300;
+
   try {
-    await store.reorderTask(draggingTaskId.value, priority, '', 'end');
+    if (!targetPriority || targetPriority !== dragSourcePriority.value) return;
+    if (targetRecordId && targetRecordId !== sourceId) {
+      await store.reorderTask(sourceId, targetPriority, targetRecordId, placement);
+    } else {
+      await store.reorderTask(sourceId, targetPriority, '', 'end');
+    }
   } catch (error) {
     emit('error', `排序失败：${String(error)}`);
   } finally {
@@ -348,8 +601,68 @@ async function onDropOnGroup(priority: string) {
   }
 }
 
-async function onDropOnTask(priority: string, beforeRecordId: string) {
+async function onHandleMouseUp(event: MouseEvent) {
+  removePointerListeners();
+  if (!pointerDragActive.value || !draggingTaskId.value || !pointerDragMoved) {
+    onDragEnd();
+    return;
+  }
+
+  updatePointerDropTarget(event);
+  const sourceId = draggingTaskId.value;
+  const targetPriority = pointerDropPriority;
+  const targetRecordId = dragOverTaskId.value;
+  const placement = dragOverPlacement.value;
+  suppressClickTaskId = sourceId;
+  suppressClickUntil = Date.now() + 300;
+
+  try {
+    if (!targetPriority || targetPriority !== dragSourcePriority.value) return;
+    if (targetRecordId && targetRecordId !== sourceId) {
+      await store.reorderTask(sourceId, targetPriority, targetRecordId, placement);
+    } else {
+      await store.reorderTask(sourceId, targetPriority, '', 'end');
+    }
+  } catch (error) {
+    emit('error', `排序失败：${String(error)}`);
+  } finally {
+    onDragEnd();
+  }
+}
+
+async function onDropOnGroup(priority: string) {
+  if (!draggingTaskId.value) return;
+  if (priority !== dragSourcePriority.value) {
+    onDragEnd();
+    return;
+  }
+  try {
+    if (dragOverTaskId.value) {
+      await store.reorderTask(draggingTaskId.value, priority, dragOverTaskId.value, dragOverPlacement.value);
+    } else {
+      await store.reorderTask(draggingTaskId.value, priority, '', 'end');
+    }
+  } catch (error) {
+    emit('error', `排序失败：${String(error)}`);
+  } finally {
+    onDragEnd();
+  }
+}
+
+function isGroupTailActive(group: TaskGroup): boolean {
+  if (!draggingTaskId.value || dragOverGroup.value !== group.key) return false;
+  if (!dragOverTaskId.value) return true;
+  const lastTask = group.tasks[group.tasks.length - 1];
+  return Boolean(lastTask && dragOverTaskId.value === lastTask.record_id && dragOverPlacement.value === 'after');
+}
+
+async function onDropOnTask(group: TaskGroup, beforeRecordId: string) {
   if (!draggingTaskId.value) {
+    onDragEnd();
+    return;
+  }
+  const priority = group.priority;
+  if (priority !== dragSourcePriority.value) {
     onDragEnd();
     return;
   }
@@ -395,6 +708,10 @@ watch(
   },
   { immediate: true }
 );
+
+onBeforeUnmount(() => {
+  removePointerListeners();
+});
 </script>
 
 <style scoped>
@@ -513,13 +830,32 @@ watch(
   padding: 0 0 10px;
 }
 
+.task-list.dragging {
+  cursor: grabbing;
+}
+
+.drag-guidance {
+  margin: 6px 8px 8px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 9%, var(--bg-solid));
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: center;
+}
+
 .task-group {
   margin-top: 8px;
   border-radius: var(--radius-card);
+  padding: 1px 0 4px;
+  transition: background 0.15s ease, outline-color 0.15s ease;
 }
 
 .task-group.drag-over {
-  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--primary) 28%, transparent);
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
 }
 
 .task-group__header {
@@ -532,12 +868,74 @@ watch(
   color: var(--text-tertiary);
 }
 
-.task-draggable.dragging {
-  opacity: 0.55;
+.task-draggable.dragging,
+.task-draggable.pointer-dragging {
+  opacity: 0.78;
 }
 
 .task-draggable {
   position: relative;
+}
+
+.task-draggable.dragging :deep(.task-card),
+.task-draggable.pointer-dragging :deep(.task-card) {
+  border-color: color-mix(in srgb, var(--primary) 60%, var(--border));
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--primary) 22%, transparent);
+  transform: scale(0.985);
+}
+
+.task-draggable :deep(.task-card) {
+  padding-right: 32px;
+}
+
+.task-drag-handle {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  z-index: 4;
+  width: 28px;
+  height: 32px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: grab;
+  opacity: 0.62;
+  transform: translateY(-50%);
+  user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.task-drag-handle span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.task-draggable:hover .task-drag-handle,
+.task-drag-handle:focus-visible,
+.task-list.dragging .task-drag-handle,
+.task-draggable.dragging .task-drag-handle {
+  opacity: 1;
+}
+
+.task-drag-handle:hover,
+.task-drag-handle:focus-visible {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+  outline: none;
+}
+
+.task-drag-handle:active {
+  cursor: grabbing;
 }
 
 .task-draggable.drop-before::before,
@@ -546,17 +944,42 @@ watch(
   position: absolute;
   left: 16px;
   right: 16px;
-  z-index: 2;
-  height: 2px;
+  z-index: 8;
+  height: 4px;
   border-radius: 999px;
   background: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent),
+    0 4px 12px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 .task-draggable.drop-before::before {
-  top: 0;
+  top: -3px;
 }
 
 .task-draggable.drop-after::after {
-  bottom: 0;
+  bottom: -3px;
+}
+
+.task-drop-tail {
+  min-height: 30px;
+  margin: 4px 12px 2px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed color-mix(in srgb, var(--text-tertiary) 28%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-solid) 54%, transparent);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 650;
+  opacity: 0.72;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.task-drop-tail.active {
+  border-color: color-mix(in srgb, var(--primary) 70%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, var(--bg-solid));
+  color: var(--primary);
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 14%, transparent);
 }
 </style>

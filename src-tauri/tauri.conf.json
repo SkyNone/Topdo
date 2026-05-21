@@ -16,7 +16,7 @@
         "title": "Topdo",
         "width": 320,
         "height": 500,
-        "minWidth": 260,
+        "minWidth": 320,
         "minHeight": 300,
         "maxWidth": 500,
         "maxHeight": 900,

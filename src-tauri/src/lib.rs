@@ -29,6 +29,8 @@ const MENUBAR_WINDOW_LABEL: &str = "menubar";
 const QUICK_CAPTURE_WINDOW_LABEL: &str = "quick-capture";
 const NORMAL_WIDTH: f64 = 320.0;
 const NORMAL_HEIGHT: f64 = 500.0;
+const NORMAL_MIN_WIDTH: f64 = 320.0;
+const NORMAL_MIN_HEIGHT: f64 = 300.0;
 const MINI_PET_WIDTH: f64 = 80.0;
 const MINI_PET_HEIGHT: f64 = 80.0;
 const MINI_PILL_WIDTH: f64 = 176.0;
@@ -839,7 +841,10 @@ fn get_main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
 fn apply_normal_mode(window: &WebviewWindow) -> tauri::Result<()> {
   window.set_resizable(true)?;
-  window.set_min_size(Option::<Size>::None)?;
+  window.set_min_size(Some(Size::Logical(LogicalSize::new(
+    NORMAL_MIN_WIDTH,
+    NORMAL_MIN_HEIGHT,
+  ))))?;
   window.set_max_size(Option::<Size>::None)?;
   window.set_size(Size::Logical(LogicalSize::new(NORMAL_WIDTH, NORMAL_HEIGHT)))?;
   Ok(())

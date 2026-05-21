@@ -158,9 +158,10 @@ onBeforeUnmount(() => {
 .title-bar {
   height: 38px;
   padding: 0 12px;
-  display: flex;
+  display: grid;
+  grid-template-columns: 78px minmax(82px, 1fr) 90px;
+  column-gap: 4px;
   align-items: center;
-  justify-content: space-between;
   background: transparent;
   border-bottom: 0.5px solid var(--border-light);
   position: relative;
@@ -173,6 +174,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-self: start;
   -webkit-app-region: no-drag;
   padding: 0 4px;
 }
@@ -216,9 +218,10 @@ onBeforeUnmount(() => {
 }
 
 .title-text {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  justify-self: center;
   z-index: 100;
   font-size: var(--font-size-base);
   font-weight: 600;
@@ -231,9 +234,9 @@ onBeforeUnmount(() => {
 .titlebar-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  justify-self: end;
+  gap: 1px;
   -webkit-app-region: no-drag;
-  margin-left: auto;
   position: relative;
   z-index: 110;
 }
@@ -269,5 +272,23 @@ onBeforeUnmount(() => {
 
 .titlebar-action svg {
   flex-shrink: 0;
+}
+
+@media (max-width: 340px) {
+  .title-bar {
+    grid-template-columns: 72px minmax(70px, 1fr) 84px;
+    padding: 0 8px;
+    column-gap: 2px;
+  }
+
+  .traffic-lights {
+    gap: 6px;
+    padding: 0 2px;
+  }
+
+  .titlebar-action {
+    width: 26px;
+    height: 28px;
+  }
 }
 </style>

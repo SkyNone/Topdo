@@ -673,14 +673,20 @@ export const useTaskStore = defineStore('task', {
         if (priority !== normalizePriority(target.priority || '普通')) {
           await this.updateTaskPriority(recordId, priority);
         }
-        await Promise.all(
-          updates.map((update) =>
-            invoke<Task>('update_local_task', {
-              id: update.id,
-              fields: { sort_order: String(update.sort_order) }
-            })
-          )
-        );
+        if (this.mode === 'local') {
+          await invoke('reorder_local_tasks', {
+            orderedIds: updates.map((update) => update.id)
+          });
+        } else {
+          await Promise.all(
+            updates.map((update) =>
+              invoke<Task>('update_local_task', {
+                id: update.id,
+                fields: { sort_order: String(update.sort_order) }
+              })
+            )
+          );
+        }
         for (const update of updates) {
           this.setTaskPatch(update.recordId, { sort_order: update.sort_order });
         }

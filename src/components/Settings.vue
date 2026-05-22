@@ -257,16 +257,10 @@
         <span class="setting-icon orange"><Icon name="star" :size="18" /></span>
         <div class="setting-text">
           <p class="setting-name">支持作者</p>
-          <p class="support-copy">核心功能会保持免费；如果 Topdo 帮你减少了任务混乱，可以请作者喝杯咖啡。</p>
+          <p class="support-copy">核心功能免费，觉得不错请作者喝杯咖啡</p>
         </div>
         <Icon name="chevron-right" :size="17" />
       </button>
-      <div class="support-tiers" aria-label="支持作者档位">
-        <span>¥6.6 咖啡</span>
-        <span>¥19.9 持续维护</span>
-        <span>¥49.9 共建者</span>
-        <span>¥99 早期赞助者</span>
-      </div>
     </section>
 
     <p v-if="statusMessage" class="status-message" :class="statusType">
@@ -381,7 +375,7 @@ interface SystemSettingsPayload {
 
 const GITHUB_REPO_URL = 'https://github.com/SkyNone/Topdo';
 const GITHUB_FEEDBACK_URL = 'https://github.com/SkyNone/Topdo/issues';
-const GITHUB_SUPPORT_URL = 'https://github.com/SkyNone/Topdo#支持作者';
+const GITHUB_SUPPORT_URL = 'https://github.com/SkyNone/Topdo/blob/main/docs/SUPPORT.md';
 const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/SkyNone/Topdo/releases/latest';
 const GITHUB_LATEST_RELEASE_URL = 'https://github.com/SkyNone/Topdo/releases/latest';
 const APP_VERSION = '2.0.1';
@@ -1300,34 +1294,11 @@ watch(
   overflow: visible;
 }
 
-.support-author-group .setting-row {
-  align-items: flex-start;
-}
-
 .support-copy {
   margin-top: 2px;
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 17px;
-}
-
-.support-tiers {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  padding: 0 16px 16px 60px;
-}
-
-.support-tiers span {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 16px;
-  padding: 5px 9px;
-  text-align: center;
 }
 
 .data-tools-header {

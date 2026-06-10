@@ -129,12 +129,14 @@
 
       <ConfirmDialog
         v-model="deleteDialogVisible"
-        title="删除任务"
-        :message="`确定删除「${pendingDeleteTask?.name || '该任务'}」？`"
-        confirm-text="删除"
+        :title="deleteDialogTitle"
+        :message="deleteDialogMessage"
+        :confirm-text="deleteDialogConfirmText"
+        :secondary-confirm-text="deleteDialogSecondaryText"
         cancel-text="取消"
         :danger="true"
         @confirm="confirmDelete"
+        @secondary-confirm="confirmStopRepeatAndDelete"
       />
 
     <ShortcutSheet
@@ -305,6 +307,19 @@ const firstReminderNudge = ref<CreatedTaskPayload | null>(null);
 const showMiniPet = computed(() => isMiniMode.value && petStore.enabled);
 const searchQueryLabel = computed(() => taskStore.searchQuery.trim());
 const searchResultCount = computed(() => taskStore.filteredTasks.length);
+const pendingDeleteIsRecurring = computed(() =>
+  Boolean(pendingDeleteTask.value?.recurrence_rule || pendingDeleteTask.value?.recurrence_parent_id)
+);
+const deleteDialogTitle = computed(() => pendingDeleteIsRecurring.value ? '删除重复任务' : '删除任务');
+const deleteDialogMessage = computed(() => {
+  const name = pendingDeleteTask.value?.name || '该任务';
+  if (pendingDeleteIsRecurring.value) {
+    return `「${name}」是重复任务。你想只删除本次，还是删除本次并停止后续重复？`;
+  }
+  return `确定删除「${name}」？`;
+});
+const deleteDialogConfirmText = computed(() => pendingDeleteIsRecurring.value ? '仅删除本次' : '删除');
+const deleteDialogSecondaryText = computed(() => pendingDeleteIsRecurring.value ? '删除本次并停止重复' : '');
 
 const { resolvedTheme } = useThemeState();
 const onboardingSteps = computed(() => ({
@@ -808,6 +823,22 @@ async function confirmDelete() {
 
   try {
     await taskStore.deleteTask(task.record_id);
+    deleteDialogVisible.value = false;
+    pendingDeleteTask.value = null;
+  } catch (error) {
+    showError(String(error));
+  }
+}
+
+async function confirmStopRepeatAndDelete() {
+  const task = pendingDeleteTask.value;
+  if (!task) {
+    deleteDialogVisible.value = false;
+    return;
+  }
+
+  try {
+    await taskStore.deleteTask(task.record_id, { stopFutureRepeats: true });
     deleteDialogVisible.value = false;
     pendingDeleteTask.value = null;
   } catch (error) {

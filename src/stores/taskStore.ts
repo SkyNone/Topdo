@@ -61,6 +61,8 @@ const FEISHU_UPDATE_URL = '/open-apis/bitable/v1/apps/{app_token}/tables/{table_
 const RECENT_TAGS_STORAGE_KEY = 'topdo_recent_task_tags_v1';
 const MAX_TASK_TAGS = 5;
 const MAX_RECENT_TAGS = 5;
+const COMPLETED_HISTORY_WINDOW_DAYS = 30;
+const COMPLETED_HISTORY_WINDOW_MS = COMPLETED_HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const localStatusSaveQueue = new Map<string, Promise<void>>();
 
@@ -252,6 +254,24 @@ function normalizeTask(task: Task): Task {
   };
 }
 
+function hydrateRecurringInstanceRules(tasks: Task[]): Task[] {
+  const byId = new Map<string, Task>();
+  for (const task of tasks) {
+    const keys = [task.id, task.record_id, task.feishu_record_id].filter(Boolean) as string[];
+    for (const key of keys) byId.set(key, task);
+  }
+
+  return tasks.map((task) => {
+    if (task.recurrence_rule || !task.recurrence_parent_id) return task;
+    const parent = byId.get(task.recurrence_parent_id);
+    return parent?.recurrence_rule ? { ...task, recurrence_rule: parent.recurrence_rule } : task;
+  });
+}
+
+function sameRecurrenceRule(a: Task['recurrence_rule'] | null | undefined, b: Task['recurrence_rule'] | null | undefined): boolean {
+  return JSON.stringify(a || null) === JSON.stringify(b || null);
+}
+
 function isRecordIdNotFound(message: string): boolean {
   return message.includes('RecordIdNotFound') || message.includes('code=1254043');
 }
@@ -276,6 +296,17 @@ function dateKeyFromTimestamp(raw: string): string {
   const ms = timestampMs(raw);
   if (!ms) return '';
   return dayKey(new Date(ms));
+}
+
+function completedReferenceMs(task: Task): number {
+  return timestampMs(task.completed_at || '') || timestampMs(task.updated_at || '') || timestampMs(task.created_at || '');
+}
+
+function isRecentCompletedTask(task: Task): boolean {
+  if (normalizeStatus(task.status) !== 'completed') return true;
+  const completed = completedReferenceMs(task);
+  if (!completed) return true;
+  return completed >= Date.now() - COMPLETED_HISTORY_WINDOW_MS;
 }
 
 function startOfWeek(date: Date): Date {
@@ -359,6 +390,10 @@ export const useTaskStore = defineStore('task', {
     completedCount: (state) => state.tasks.filter((task) => normalizeStatus(task.status) === 'completed').length,
     inProgressTasks: (state) => state.tasks.filter((task) => normalizeStatus(task.status) === 'in_progress'),
     hasActiveSearch: (state) => state.searchQuery.trim().length > 0,
+    hiddenOldCompletedCount: (state) => {
+      if (state.searchQuery.trim().length > 0) return 0;
+      return state.tasks.filter((task) => normalizeStatus(task.status) === 'completed' && !isRecentCompletedTask(task)).length;
+    },
     todayCompletedCount: (state) => {
       const today = dayKey(new Date());
       return state.tasks.filter((task) => normalizeStatus(task.status) === 'completed' && dateKeyFromTimestamp(task.completed_at || '') === today).length;
@@ -419,16 +454,20 @@ export const useTaskStore = defineStore('task', {
     filteredTasks: (state) => {
       const sorted = sortTasksByPolicy(state.tasks);
       const searched = applySearchFilter(sorted, state.searchQuery);
+      const hasSearch = state.searchQuery.trim().length > 0;
+      const visibleTasks = hasSearch
+        ? searched
+        : searched.filter((task) => normalizeStatus(task.status) !== 'completed' || isRecentCompletedTask(task));
       switch (state.filter) {
         case 'pending':
-          return searched.filter((task) => normalizeStatus(task.status) === 'todo');
+          return visibleTasks.filter((task) => normalizeStatus(task.status) === 'todo');
         case 'in_progress':
-          return searched.filter((task) => normalizeStatus(task.status) === 'in_progress');
+          return visibleTasks.filter((task) => normalizeStatus(task.status) === 'in_progress');
         case 'done':
-          return searched.filter((task) => normalizeStatus(task.status) === 'completed');
+          return visibleTasks.filter((task) => normalizeStatus(task.status) === 'completed');
         case 'all':
         default:
-          return searched;
+          return visibleTasks;
       }
     },
     groupedFilteredTasks: (state): Array<{ status: TaskStatusGroup; tasks: Task[] }> => {
@@ -440,7 +479,9 @@ export const useTaskStore = defineStore('task', {
       const includeInProgress = state.filter === 'all' || state.filter === 'in_progress';
       const includeDone = state.filter === 'all' || state.filter === 'done';
 
-      const sorted = applySearchFilter(sortTasksByPolicy(state.tasks), state.searchQuery);
+      const hasSearch = state.searchQuery.trim().length > 0;
+      const sorted = applySearchFilter(sortTasksByPolicy(state.tasks), state.searchQuery)
+        .filter((task) => hasSearch || normalizeStatus(task.status) !== 'completed' || isRecentCompletedTask(task));
       for (const task of sorted) {
         const key = normalizeStatus(task.status);
         if (key === 'in_progress') {
@@ -503,11 +544,7 @@ export const useTaskStore = defineStore('task', {
     },
 
     setTasks(tasks: Task[]) {
-      if (this.mode === 'feishu') {
-        this.tasks = tasks.map(normalizeTask);
-        return;
-      }
-      this.tasks = tasks.map(normalizeTask);
+      this.tasks = hydrateRecurringInstanceRules(tasks.map(normalizeTask));
     },
 
     setSyncMeta(payload?: SyncTasksResult['sync_meta']) {
@@ -600,6 +637,12 @@ export const useTaskStore = defineStore('task', {
 
       const fields: Record<string, string> = {};
       const patch: Partial<Task> = {};
+      let parentRecurrenceUpdate: {
+        recordId: string;
+        fields: Record<string, string>;
+        patch: Partial<Task>;
+        previous: Task;
+      } | null = null;
       let remoteAffectingChanged = false;
       let tagsForRecent: string[] | null = null;
 
@@ -652,9 +695,21 @@ export const useTaskStore = defineStore('task', {
       }
       if (input.recurrence_rule !== undefined) {
         const recurrence = input.recurrence_rule || null;
-        if (JSON.stringify(recurrence) !== JSON.stringify(target.recurrence_rule || null)) {
-          fields.recurrence_rule = recurrence ? JSON.stringify(recurrence) : '';
+        const serialized = recurrence ? JSON.stringify(recurrence) : '';
+        if (!sameRecurrenceRule(recurrence, target.recurrence_rule)) {
+          fields.recurrence_rule = serialized;
           patch.recurrence_rule = recurrence;
+        }
+
+        const parentId = (target.recurrence_parent_id || '').trim();
+        const parent = parentId ? findTaskByRecordId(this.tasks, parentId) : undefined;
+        if (parent && !sameRecurrenceRule(recurrence, parent.recurrence_rule)) {
+          parentRecurrenceUpdate = {
+            recordId: parent.record_id || parent.id || parentId,
+            fields: { recurrence_rule: serialized },
+            patch: { recurrence_rule: recurrence },
+            previous: { ...parent }
+          };
         }
       }
       if (input.reminder_before !== undefined) {
@@ -667,25 +722,40 @@ export const useTaskStore = defineStore('task', {
         }
       }
 
-      if (Object.keys(fields).length === 0) return;
+      const hasCurrentChanges = Object.keys(fields).length > 0;
+      if (!hasCurrentChanges && !parentRecurrenceUpdate) return;
 
       const previous = { ...target };
-      this.setTaskPatch(recordId, {
-        ...patch,
-        sync_status: this.mode === 'feishu' && remoteAffectingChanged ? 'pending' : target.sync_status
-      });
+      if (hasCurrentChanges) {
+        this.setTaskPatch(recordId, {
+          ...patch,
+          sync_status: this.mode === 'feishu' && remoteAffectingChanged ? 'pending' : target.sync_status
+        });
+      }
+      if (parentRecurrenceUpdate) {
+        this.setTaskPatch(parentRecurrenceUpdate.recordId, parentRecurrenceUpdate.patch);
+      }
 
       try {
-        const updated = await invoke<Task>('update_local_task', {
-          id: target.id || target.record_id,
-          fields
-        });
-        this.setTaskPatch(recordId, {
-          ...normalizeTask(updated),
-          record_id: updated.record_id || recordId,
-          id: updated.id || updated.record_id || recordId,
-          sync_status: this.mode === 'feishu' && remoteAffectingChanged ? 'pending' : updated.sync_status
-        });
+        if (hasCurrentChanges) {
+          const updated = await invoke<Task>('update_local_task', {
+            id: target.id || target.record_id,
+            fields
+          });
+          this.setTaskPatch(recordId, {
+            ...normalizeTask(updated),
+            record_id: updated.record_id || recordId,
+            id: updated.id || updated.record_id || recordId,
+            sync_status: this.mode === 'feishu' && remoteAffectingChanged ? 'pending' : updated.sync_status
+          });
+        }
+        if (parentRecurrenceUpdate) {
+          const updatedParent = await invoke<Task>('update_local_task', {
+            id: parentRecurrenceUpdate.previous.id || parentRecurrenceUpdate.previous.record_id,
+            fields: parentRecurrenceUpdate.fields
+          });
+          this.setTaskPatch(parentRecurrenceUpdate.recordId, normalizeTask(updatedParent));
+        }
         this.tasks = sortTasksByPolicy(this.tasks);
         if (remoteAffectingChanged) {
           this.scheduleSyncAfterWrite();
@@ -694,7 +764,10 @@ export const useTaskStore = defineStore('task', {
           this.rememberTags(tagsForRecent);
         }
       } catch (error) {
-        this.setTaskPatch(recordId, previous);
+        if (hasCurrentChanges) this.setTaskPatch(recordId, previous);
+        if (parentRecurrenceUpdate) {
+          this.setTaskPatch(parentRecurrenceUpdate.recordId, parentRecurrenceUpdate.previous);
+        }
         throw error;
       }
     },
@@ -709,6 +782,7 @@ export const useTaskStore = defineStore('task', {
           due_date: instance.due_date,
           recurrence_parent_id: instance.recurrence_parent_id,
           recurrence_index: instance.recurrence_index,
+          recurrence_rule: instance.recurrence_rule,
           reminder_before: instance.reminder_before
         });
       }
@@ -1548,13 +1622,32 @@ export const useTaskStore = defineStore('task', {
       }
     },
 
-    async deleteTask(recordId: string) {
+    async deleteTask(recordId: string, options: { stopFutureRepeats?: boolean } = {}) {
       const target = this.tasks.find((task) => task.record_id === recordId || task.id === recordId);
       if (!target) return;
       const snapshot = [...this.tasks];
+
+      const parentId = (target.recurrence_parent_id || '').trim();
+      const parent = parentId ? findTaskByRecordId(this.tasks, parentId) : undefined;
+      const shouldStopParent = Boolean(
+        options.stopFutureRepeats && parent && parent.record_id !== recordId && parent.id !== recordId
+      );
+      if (options.stopFutureRepeats && parentId && !parent) {
+        throw new Error('找不到原始重复任务，无法停止后续重复');
+      }
+      if (shouldStopParent && parent) {
+        this.setTaskPatch(parent.record_id || parent.id || parentId, { recurrence_rule: null });
+      }
       this.tasks = this.tasks.filter((task) => task.record_id !== recordId);
 
       try {
+        if (shouldStopParent && parent) {
+          await invoke<Task>('update_local_task', {
+            id: parent.id || parent.record_id,
+            fields: { recurrence_rule: '' }
+          });
+        }
+
         if (this.mode === 'local') {
           log('API', '删除本地任务', { recordId: target.record_id });
           await invoke<boolean>('delete_local_task', { id: target.id || target.record_id });
@@ -1572,6 +1665,18 @@ export const useTaskStore = defineStore('task', {
         }
         this.scheduleSyncAfterWrite();
       } catch (error) {
+        if (shouldStopParent && parent) {
+          try {
+            await invoke<Task>('update_local_task', {
+              id: parent.id || parent.record_id,
+              fields: {
+                recurrence_rule: parent.recurrence_rule ? JSON.stringify(parent.recurrence_rule) : ''
+              }
+            });
+          } catch (rollbackError) {
+            log('API', '停止重复回滚失败', { error: String(rollbackError) });
+          }
+        }
         this.tasks = snapshot;
         throw error;
       }

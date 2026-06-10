@@ -6,6 +6,9 @@
 
       <div class="mt-4 flex justify-end gap-2">
         <button type="button" class="btn" @click="onCancel">{{ cancelText }}</button>
+        <button v-if="secondaryConfirmText" type="button" class="btn btn-secondary" @click="onSecondaryConfirm">
+          {{ secondaryConfirmText }}
+        </button>
         <button type="button" class="btn" :class="danger ? 'btn-danger' : 'btn-primary'" @click="onConfirm">
           {{ confirmText }}
         </button>
@@ -21,6 +24,7 @@ const props = withDefaults(
     title: string;
     message: string;
     confirmText?: string;
+    secondaryConfirmText?: string;
     cancelText?: string;
     danger?: boolean;
   }>(),
@@ -34,6 +38,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void;
   (event: 'confirm'): void;
+  (event: 'secondary-confirm'): void;
   (event: 'cancel'): void;
 }>();
 
@@ -44,6 +49,10 @@ function onCancel() {
 
 function onConfirm() {
   emit('confirm');
+}
+
+function onSecondaryConfirm() {
+  emit('secondary-confirm');
 }
 </script>
 
@@ -61,6 +70,12 @@ function onConfirm() {
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
+}
+
+.btn-secondary {
+  background: rgba(0, 122, 255, 0.08);
+  border-color: rgba(0, 122, 255, 0.22);
+  color: var(--primary);
 }
 
 .btn-danger {

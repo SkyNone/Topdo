@@ -10,6 +10,10 @@
       />
     </Transition>
 
+    <div v-if="showCompletedWindowHint" class="completed-window-hint">
+      默认仅展示近 30 天已完成任务，已隐藏 {{ store.hiddenOldCompletedCount }} 条历史完成；搜索可查找历史任务。
+    </div>
+
     <div v-if="displayedTasks.length === 0 && !creating" class="empty-state">
       <div class="empty-icon">{{ emptyIcon }}</div>
       <div class="empty-text">{{ emptyText }}</div>
@@ -167,6 +171,9 @@ const emit = defineEmits<{
 
 const store = useTaskStore();
 const displayedTasks = computed(() => store.filteredTasks);
+const showCompletedWindowHint = computed(
+  () => store.hiddenOldCompletedCount > 0 && !store.hasActiveSearch && (store.filter === 'done' || store.filter === 'all')
+);
 const focusedTaskId = ref<string>('');
 const draggingTaskId = ref('');
 const dragSourceGroupKey = ref('');
@@ -309,6 +316,7 @@ const emptyIcon = computed(() => {
 
 const emptyText = computed(() => {
   if (store.hasActiveSearch) return '没有匹配的任务';
+  if (store.filter === 'done' && store.hiddenOldCompletedCount > 0) return '近 30 天没有已完成任务';
   if (store.filter === 'done') return '还没有已完成的任务';
   if (store.filter === 'pending') return '待启动任务已清空';
   if (store.filter === 'in_progress') return '还没有进行中的任务';
@@ -889,6 +897,17 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-weight: 650;
   text-align: center;
+}
+
+.completed-window-hint {
+  margin: 6px 8px 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .task-group {

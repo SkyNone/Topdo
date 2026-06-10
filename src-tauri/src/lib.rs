@@ -472,6 +472,8 @@ struct FeishuRecord {
 struct FeishuRecordsData {
   items: Option<Vec<FeishuRecord>>,
   records: Option<Vec<FeishuRecord>>,
+  has_more: Option<bool>,
+  page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1555,57 +1557,84 @@ async fn fetch_remote_tasks(app: &AppHandle, filter_completed: bool) -> Result<V
     .build()
     .map_err(|err| format!("http client init failed: {err}"))?;
   let mut records = Vec::new();
-  for attempt in 0..2 {
+  let mut fetched_all_pages = false;
+  'token_attempts: for attempt in 0..2 {
     let token = get_tenant_access_token(app, attempt == 1).await?;
-    let mut req = client
-      .get(&endpoint)
-      .query(&[("page_size", "100")])
-      .header("Content-Type", "application/json")
-      .header("Authorization", format!("Bearer {}", token));
+    let mut page_token: Option<String> = None;
+    records.clear();
 
-    if filter_completed {
-      req = req.query(&[("filter", r#"CurrentValue.[状态] != "已完成""#)]);
-    }
+    loop {
+      let mut query = vec![("page_size", "100".to_string())];
+      if let Some(token) = page_token.as_ref().filter(|value| !value.trim().is_empty()) {
+        query.push(("page_token", token.clone()));
+      }
+      if filter_completed {
+        query.push(("filter", r#"CurrentValue.[状态] != "已完成""#.to_string()));
+      }
 
-    let response = req
-      .send()
-      .await
-      .map_err(|err| format!("request failed: {err}"))?;
-    let status = response.status();
-    let body = response
-      .text()
-      .await
-      .map_err(|err| format!("read response failed: {err}"))?;
+      let response = client
+        .get(&endpoint)
+        .query(&query)
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|err| format!("request failed: {err}"))?;
+      let status = response.status();
+      let body = response
+        .text()
+        .await
+        .map_err(|err| format!("read response failed: {err}"))?;
 
-    if !status.is_success() {
-      if let Ok(value) = serde_json::from_str::<Value>(&body) {
-        if let Some(code) = value.get("code").and_then(Value::as_i64) {
-          if is_token_invalid_code(code as i32) && attempt == 0 {
-            continue;
+      if !status.is_success() {
+        if let Ok(value) = serde_json::from_str::<Value>(&body) {
+          if let Some(code) = value.get("code").and_then(Value::as_i64) {
+            if is_token_invalid_code(code as i32) && attempt == 0 {
+              continue 'token_attempts;
+            }
           }
         }
+        return Err(build_feishu_http_error(status, &body));
       }
-      return Err(build_feishu_http_error(status, &body));
-    }
 
-    let parsed: FeishuRecordsResponse =
-      serde_json::from_str(&body).map_err(|err| format!("invalid response: {err}"))?;
-    if parsed.code != 0 {
-      if is_token_invalid_code(parsed.code) && attempt == 0 {
+      let parsed: FeishuRecordsResponse =
+        serde_json::from_str(&body).map_err(|err| format!("invalid response: {err}"))?;
+      if parsed.code != 0 {
+        if is_token_invalid_code(parsed.code) && attempt == 0 {
+          continue 'token_attempts;
+        }
+        return Err(format!(
+          "飞书返回错误 code={} {}",
+          parsed.code,
+          parsed.msg.unwrap_or_default()
+        ));
+      }
+
+      let data = parsed.data.unwrap_or(FeishuRecordsData {
+        items: None,
+        records: None,
+        has_more: Some(false),
+        page_token: None,
+      });
+      records.extend(data.items.or(data.records).unwrap_or_default());
+
+      if data.has_more.unwrap_or(false) {
+        let next_page_token = data.page_token.unwrap_or_default();
+        if next_page_token.trim().is_empty() {
+          return Err("飞书分页返回缺少 page_token，无法完整同步".to_string());
+        }
+        page_token = Some(next_page_token);
         continue;
       }
-      return Err(format!(
-        "飞书返回错误 code={} {}",
-        parsed.code,
-        parsed.msg.unwrap_or_default()
-      ));
-    }
 
-    records = parsed
-      .data
-      .and_then(|d| d.items.or(d.records))
-      .unwrap_or_default();
+      fetched_all_pages = true;
+      break;
+    }
     break;
+  }
+
+  if !fetched_all_pages {
+    return Err("飞书记录未完整拉取，已停止本次同步".to_string());
   }
 
   Ok(records
@@ -2097,7 +2126,7 @@ async fn db_get_feishu_tasks(app: AppHandle) -> Result<Vec<Task>, String> {
 async fn db_prune_stale_feishu_tasks(app: AppHandle, remote_ids: Vec<String>) -> Result<(), String> {
   let db_path = db_file_path(&app)?;
   tokio::task::spawn_blocking(move || {
-    let conn = open_db(&db_path)?;
+    let mut conn = open_db(&db_path)?;
 
     if remote_ids.is_empty() {
       conn
@@ -2109,17 +2138,46 @@ async fn db_prune_stale_feishu_tasks(app: AppHandle, remote_ids: Vec<String>) ->
       return Ok::<(), String>(());
     }
 
-    let placeholders = vec!["?"; remote_ids.len()].join(",");
-    let sql = format!(
-      "DELETE FROM tasks
-       WHERE source = 'feishu'
-         AND sync_status NOT IN ('pending', 'failed')
-         AND record_id NOT IN ({})",
-      placeholders
-    );
+    conn
+      .execute(
+        "CREATE TEMP TABLE IF NOT EXISTS remote_feishu_ids (record_id TEXT PRIMARY KEY)",
+        [],
+      )
+      .map_err(|err| format!("prepare stale prune failed: {err}"))?;
+    conn
+      .execute("DELETE FROM remote_feishu_ids", [])
+      .map_err(|err| format!("prepare stale prune failed: {err}"))?;
+
+    {
+      let tx = conn
+        .transaction()
+        .map_err(|err| format!("prepare stale prune failed: {err}"))?;
+      {
+        let mut stmt = tx
+          .prepare("INSERT OR IGNORE INTO remote_feishu_ids (record_id) VALUES (?1)")
+          .map_err(|err| format!("prepare stale prune failed: {err}"))?;
+        for id in remote_ids.iter().filter(|id| !id.trim().is_empty()) {
+          stmt
+            .execute(params![id])
+            .map_err(|err| format!("prepare stale prune failed: {err}"))?;
+        }
+      }
+      tx
+        .commit()
+        .map_err(|err| format!("prepare stale prune failed: {err}"))?;
+    }
 
     conn
-      .execute(&sql, rusqlite::params_from_iter(remote_ids.iter()))
+      .execute(
+        "DELETE FROM tasks
+       WHERE source = 'feishu'
+         AND sync_status NOT IN ('pending', 'failed')
+         AND NOT EXISTS (
+           SELECT 1 FROM remote_feishu_ids remote
+           WHERE remote.record_id = tasks.record_id
+         )",
+        [],
+      )
       .map_err(|err| format!("prune stale feishu tasks failed: {err}"))?;
 
     Ok::<(), String>(())

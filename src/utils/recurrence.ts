@@ -9,6 +9,7 @@ export interface RecurringInstanceInput {
   due_date: string;
   recurrence_parent_id: string;
   recurrence_index: number;
+  recurrence_rule: RecurrenceRule;
   reminder_before: number | null;
 }
 
@@ -167,6 +168,7 @@ export function generateRecurringInstances(tasks: Task[], today = new Date()): R
       due_date: occurrenceDueDate(template.due_date, todayStr),
       recurrence_parent_id: templateId,
       recurrence_index: getNextIndex(tasks, templateId),
+      recurrence_rule: rule,
       reminder_before: template.reminder_before ?? null
     });
   }

@@ -1,14 +1,21 @@
 <template>
   <div v-if="modelValue" class="absolute inset-0 z-50 flex items-center justify-center bg-black/25 p-4">
-    <div class="w-full max-w-[280px] rounded-[10px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-4 shadow-lg">
+    <div class="w-full max-w-[320px] rounded-[14px] border border-[color:var(--border)] bg-[color:var(--bg-solid)] p-4 shadow-lg">
       <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">{{ title }}</h3>
       <p class="mt-2 text-xs text-[color:var(--text-secondary)]">{{ message }}</p>
 
-      <div class="mt-4 flex justify-end gap-2">
-        <button type="button" class="btn" @click="onCancel">{{ cancelText }}</button>
-        <button v-if="secondaryConfirmText" type="button" class="btn btn-secondary" @click="onSecondaryConfirm">
+      <div v-if="secondaryConfirmText" class="dialog-actions dialog-actions-stacked">
+        <button type="button" class="btn btn-danger" @click="onConfirm">
+          {{ confirmText }}
+        </button>
+        <button type="button" class="btn btn-secondary" @click="onSecondaryConfirm">
           {{ secondaryConfirmText }}
         </button>
+        <button type="button" class="btn" @click="onCancel">{{ cancelText }}</button>
+      </div>
+
+      <div v-else class="dialog-actions dialog-actions-inline">
+        <button type="button" class="btn" @click="onCancel">{{ cancelText }}</button>
         <button type="button" class="btn" :class="danger ? 'btn-danger' : 'btn-primary'" @click="onConfirm">
           {{ confirmText }}
         </button>
@@ -58,12 +65,34 @@ function onSecondaryConfirm() {
 
 <style scoped>
 .btn {
+  min-height: 34px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-solid);
   color: var(--text-secondary);
   font-size: 12px;
-  padding: 6px 10px;
+  font-weight: 600;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+.dialog-actions {
+  margin-top: 16px;
+}
+
+.dialog-actions-inline {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog-actions-stacked {
+  display: grid;
+  gap: 8px;
+}
+
+.dialog-actions-stacked .btn {
+  width: 100%;
 }
 
 .btn-primary {

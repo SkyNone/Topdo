@@ -59,6 +59,7 @@ interface CreateTaskInput {
 const FEISHU_RECORDS_URL = '/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records';
 const FEISHU_UPDATE_URL = '/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}';
 const RECENT_TAGS_STORAGE_KEY = 'topdo_recent_task_tags_v1';
+const SKIPPED_RECURRENCES_STORAGE_KEY = 'topdo_skipped_recurrences_v1';
 const MAX_TASK_TAGS = 5;
 const MAX_RECENT_TAGS = 5;
 const COMPLETED_HISTORY_WINDOW_DAYS = 30;
@@ -238,6 +239,26 @@ function persistRecentTags(tags: string[]) {
   }
 }
 
+function loadSkippedRecurrences(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SKIPPED_RECURRENCES_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSkippedRecurrences(keys: string[]) {
+  if (typeof window === 'undefined') return;
+  const unique = Array.from(new Set(keys.filter(Boolean))).slice(-500);
+  try {
+    window.localStorage.setItem(SKIPPED_RECURRENCES_STORAGE_KEY, JSON.stringify(unique));
+  } catch {
+    // Skip markers are best-effort; task deletion should not be blocked by storage failures.
+  }
+}
+
 function normalizeTask(task: Task): Task {
   return {
     ...task,
@@ -296,6 +317,43 @@ function dateKeyFromTimestamp(raw: string): string {
   const ms = timestampMs(raw);
   if (!ms) return '';
   return dayKey(new Date(ms));
+}
+
+function dueDateKey(raw: string | undefined): string {
+  const match = (raw || '').trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] || '';
+}
+
+function recurrenceSkipKey(parentId: string, occurrenceDate: string): string {
+  return `${parentId.trim()}::${occurrenceDate.trim()}`;
+}
+
+function skippedRecurrenceKeyForTask(task: Task): string {
+  const parentId = (task.recurrence_parent_id || '').trim();
+  if (!parentId) return '';
+  const occurrenceDate = dueDateKey(task.due_date) || dateKeyFromTimestamp(task.created_at || '') || dayKey(new Date());
+  if (!occurrenceDate) return '';
+  return recurrenceSkipKey(parentId, occurrenceDate);
+}
+
+function rememberSkippedRecurrence(task: Task) {
+  const key = skippedRecurrenceKeyForTask(task);
+  if (!key) return;
+  const keys = loadSkippedRecurrences();
+  if (!keys.includes(key)) {
+    persistSkippedRecurrences([...keys, key]);
+  }
+}
+
+function forgetSkippedRecurrence(task: Task) {
+  const key = skippedRecurrenceKeyForTask(task);
+  if (!key) return;
+  persistSkippedRecurrences(loadSkippedRecurrences().filter((item) => item !== key));
+}
+
+function isSkippedRecurrence(parentId: string, occurrenceDate: string): boolean {
+  if (!parentId.trim() || !occurrenceDate.trim()) return false;
+  return loadSkippedRecurrences().includes(recurrenceSkipKey(parentId, occurrenceDate));
 }
 
 function completedReferenceMs(task: Task): number {
@@ -773,7 +831,10 @@ export const useTaskStore = defineStore('task', {
     },
 
     async initRecurringTasks() {
-      const instances = generateRecurringInstances(this.tasks);
+      const instances = generateRecurringInstances(this.tasks).filter((instance) => {
+        const occurrenceDate = dueDateKey(instance.due_date) || dayKey(new Date());
+        return !isSkippedRecurrence(instance.recurrence_parent_id, occurrenceDate);
+      });
       for (const instance of instances) {
         await this.createTask({
           name: instance.name,
@@ -1626,6 +1687,7 @@ export const useTaskStore = defineStore('task', {
       const target = this.tasks.find((task) => task.record_id === recordId || task.id === recordId);
       if (!target) return;
       const snapshot = [...this.tasks];
+      const shouldSkipCurrentOccurrence = Boolean(target.recurrence_parent_id && !options.stopFutureRepeats);
 
       const parentId = (target.recurrence_parent_id || '').trim();
       const parent = parentId ? findTaskByRecordId(this.tasks, parentId) : undefined;
@@ -1637,6 +1699,9 @@ export const useTaskStore = defineStore('task', {
       }
       if (shouldStopParent && parent) {
         this.setTaskPatch(parent.record_id || parent.id || parentId, { recurrence_rule: null });
+      }
+      if (shouldSkipCurrentOccurrence) {
+        rememberSkippedRecurrence(target);
       }
       this.tasks = this.tasks.filter((task) => task.record_id !== recordId);
 
@@ -1665,6 +1730,9 @@ export const useTaskStore = defineStore('task', {
         }
         this.scheduleSyncAfterWrite();
       } catch (error) {
+        if (shouldSkipCurrentOccurrence) {
+          forgetSkippedRecurrence(target);
+        }
         if (shouldStopParent && parent) {
           try {
             await invoke<Task>('update_local_task', {

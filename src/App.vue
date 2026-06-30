@@ -8,7 +8,7 @@
         @mousedown="onMiniMouseDown"
       >
         <CatPet v-if="showMiniPet" :show-badge="petStore.showBadge" :animations="petStore.animations" />
-        <button v-else type="button" class="mini-pill" @click.stop="restoreNormalMode">
+        <button v-else type="button" class="mini-pill" @click.stop.prevent>
           <span class="mini-pill__brand">Topdo</span>
           <span class="mini-pill__meta">
             <span class="mini-pill__count">{{ taskStore.todoCount }}</span>
@@ -279,8 +279,10 @@ const miniDragging = ref(false);
 const searchInputRef = ref<HTMLInputElement | null>(null);
 
 let miniStartPoint: { x: number; y: number } | null = null;
+let miniPressStartedAt = 0;
 let miniMouseMoveHandler: ((event: MouseEvent) => void) | null = null;
 let miniMouseUpHandler: (() => void) | null = null;
+let miniSuppressClick = false;
 
 const toast = ref('');
 const reminderToasts = ref<InAppReminder[]>([]);
@@ -307,19 +309,32 @@ const firstReminderNudge = ref<CreatedTaskPayload | null>(null);
 const showMiniPet = computed(() => isMiniMode.value && petStore.enabled);
 const searchQueryLabel = computed(() => taskStore.searchQuery.trim());
 const searchResultCount = computed(() => taskStore.filteredTasks.length);
+const pendingDeleteIsRecurringInstance = computed(() => Boolean(pendingDeleteTask.value?.recurrence_parent_id));
+const pendingDeleteIsRecurringTemplate = computed(() =>
+  Boolean(pendingDeleteTask.value?.recurrence_rule && !pendingDeleteTask.value?.recurrence_parent_id)
+);
 const pendingDeleteIsRecurring = computed(() =>
-  Boolean(pendingDeleteTask.value?.recurrence_rule || pendingDeleteTask.value?.recurrence_parent_id)
+  pendingDeleteIsRecurringInstance.value || pendingDeleteIsRecurringTemplate.value
 );
 const deleteDialogTitle = computed(() => pendingDeleteIsRecurring.value ? '删除重复任务' : '删除任务');
 const deleteDialogMessage = computed(() => {
   const name = pendingDeleteTask.value?.name || '该任务';
-  if (pendingDeleteIsRecurring.value) {
+  if (pendingDeleteIsRecurringInstance.value) {
     return `「${name}」是重复任务。你想只删除本次，还是删除本次并停止后续重复？`;
+  }
+  if (pendingDeleteIsRecurringTemplate.value) {
+    return `「${name}」是重复任务的原始任务。删除后会停止后续重复生成。`;
   }
   return `确定删除「${name}」？`;
 });
-const deleteDialogConfirmText = computed(() => pendingDeleteIsRecurring.value ? '仅删除本次' : '删除');
-const deleteDialogSecondaryText = computed(() => pendingDeleteIsRecurring.value ? '删除本次并停止重复' : '');
+const deleteDialogConfirmText = computed(() => {
+  if (pendingDeleteIsRecurringInstance.value) return '仅删除本次';
+  if (pendingDeleteIsRecurringTemplate.value) return '删除并停止重复';
+  return '删除';
+});
+const deleteDialogSecondaryText = computed(() =>
+  pendingDeleteIsRecurringInstance.value ? '删除本次并停止重复' : ''
+);
 
 const { resolvedTheme } = useThemeState();
 const onboardingSteps = computed(() => ({
@@ -648,8 +663,16 @@ function clearMiniDragListeners() {
 function cancelMiniInteraction() {
   clearMiniDragListeners();
   miniStartPoint = null;
+  miniPressStartedAt = 0;
   miniPressed.value = false;
   miniDragging.value = false;
+}
+
+function suppressMiniClick(duration = 180) {
+  miniSuppressClick = true;
+  window.setTimeout(() => {
+    miniSuppressClick = false;
+  }, duration);
 }
 
 function onMiniMouseDown(event: MouseEvent) {
@@ -657,6 +680,7 @@ function onMiniMouseDown(event: MouseEvent) {
   miniPressed.value = true;
   miniDragging.value = false;
   miniStartPoint = { x: event.clientX, y: event.clientY };
+  miniPressStartedAt = Date.now();
 
   clearMiniDragListeners();
   miniMouseMoveHandler = (moveEvent: MouseEvent) => {
@@ -665,6 +689,7 @@ function onMiniMouseDown(event: MouseEvent) {
     const dy = moveEvent.clientY - miniStartPoint.y;
     if (Math.hypot(dx, dy) < 3) return;
     miniDragging.value = true;
+    suppressMiniClick(500);
     clearMiniDragListeners();
     void appWindow
       .startDragging()
@@ -674,6 +699,7 @@ function onMiniMouseDown(event: MouseEvent) {
       .finally(() => {
         window.setTimeout(() => {
           miniStartPoint = null;
+          miniPressStartedAt = 0;
           miniPressed.value = false;
           miniDragging.value = false;
           void persistPetPosition();
@@ -682,12 +708,16 @@ function onMiniMouseDown(event: MouseEvent) {
   };
 
   miniMouseUpHandler = () => {
-    const shouldRestore = !miniDragging.value;
+    const pressDuration = Date.now() - miniPressStartedAt;
+    const shouldRestore = !miniDragging.value && pressDuration < 260;
     clearMiniDragListeners();
     miniStartPoint = null;
+    miniPressStartedAt = 0;
     if (shouldRestore) {
+      suppressMiniClick();
       void restoreNormalMode();
     } else {
+      suppressMiniClick(350);
       void persistPetPosition();
     }
     window.setTimeout(() => {

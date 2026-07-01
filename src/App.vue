@@ -86,6 +86,7 @@
             @create-habit-template="openHabitTemplate"
             @error="showError"
             @request-delete="openDeleteDialog"
+            @task-completed="onTaskCompleted"
           />
 
           <div v-if="firstReminderNudge" class="first-reminder-nudge">
@@ -150,6 +151,32 @@
         @open="openReminderToast"
         @dismiss="dismissReminderToast"
       />
+
+      <div
+        v-if="completionBursts.length || completionClearVisible"
+        class="completion-effect-layer"
+        aria-hidden="true"
+      >
+        <div
+          v-for="burst in completionBursts"
+          :key="burst.id"
+          class="completion-burst"
+          :style="{ left: `${burst.x}px`, top: `${burst.y}px` }"
+        >
+          <span class="completion-burst__ring"></span>
+          <span
+            v-for="particle in burst.particles"
+            :key="particle.id"
+            class="completion-burst__particle"
+            :class="{ round: particle.round }"
+            :style="particle.style"
+          ></span>
+        </div>
+        <div v-if="completionClearVisible" class="completion-clear-toast">
+          <span class="completion-clear-toast__check"></span>
+          <strong>任务已清空</strong>
+        </div>
+      </div>
 
       <div
         v-if="taskStore.searchOpen && currentView === 'main' && !isMiniMode"
@@ -262,6 +289,26 @@ interface CreatedTaskPayload {
   reminderBefore: number | null;
 }
 
+interface CompletionPayload {
+  recordId: string;
+  name: string;
+  x: number;
+  y: number;
+}
+
+interface CompletionParticle {
+  id: string;
+  round: boolean;
+  style: Record<string, string>;
+}
+
+interface CompletionBurst {
+  id: string;
+  x: number;
+  y: number;
+  particles: CompletionParticle[];
+}
+
 const taskStore = useTaskStore();
 const appStore = useAppStore();
 const habitStore = useHabitStore();
@@ -286,8 +333,11 @@ let miniSuppressClick = false;
 
 const toast = ref('');
 const reminderToasts = ref<InAppReminder[]>([]);
+const completionBursts = ref<CompletionBurst[]>([]);
+const completionClearVisible = ref(false);
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 const reminderToastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const completionEffectTimers = new Set<ReturnType<typeof setTimeout>>();
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let unlistenResized: (() => void) | null = null;
 let unlistenWindowModeChanged: UnlistenFn | null = null;
@@ -375,6 +425,75 @@ function showReminderToast(reminder: InAppReminder) {
       dismissReminderToast(reminder.id);
     }, 6000)
   );
+}
+
+function scheduleCompletionEffect(callback: () => void, delay: number) {
+  const timer = setTimeout(() => {
+    completionEffectTimers.delete(timer);
+    callback();
+  }, delay);
+  completionEffectTimers.add(timer);
+}
+
+function buildCompletionParticles(seed: string): CompletionParticle[] {
+  const colors = ['#1479ff', '#20bf63', '#ffd166', '#35c8ff', '#ff6fae', '#1479ff', '#20bf63', '#ffd166'];
+  const vectors = [
+    [-34, -22, '120deg'],
+    [-16, -40, '80deg'],
+    [9, -44, '220deg'],
+    [31, -28, '160deg'],
+    [38, 1, '45deg'],
+    [18, 26, '280deg'],
+    [-24, 25, '340deg'],
+    [-40, 2, '25deg']
+  ] as const;
+
+  return vectors.map(([dx, dy, rotate], index) => ({
+    id: `${seed}-p-${index}`,
+    round: index % 2 === 1,
+    style: {
+      '--dx': `${dx}px`,
+      '--dy': `${dy}px`,
+      '--rotate': rotate,
+      '--particle-color': colors[index],
+      '--delay': `${index * 18}ms`
+    }
+  }));
+}
+
+function showCompletionClearToast() {
+  completionClearVisible.value = false;
+  void nextTick(() => {
+    completionClearVisible.value = true;
+    scheduleCompletionEffect(() => {
+      completionClearVisible.value = false;
+    }, 1700);
+  });
+}
+
+function onTaskCompleted(payload: CompletionPayload) {
+  if (isMiniMode.value) return;
+
+  const id = `${payload.recordId}-${Date.now()}`;
+  completionBursts.value = [
+    ...completionBursts.value,
+    {
+      id,
+      x: payload.x,
+      y: payload.y,
+      particles: buildCompletionParticles(id)
+    }
+  ].slice(-4);
+
+  scheduleCompletionEffect(() => {
+    completionBursts.value = completionBursts.value.filter((burst) => burst.id !== id);
+  }, 900);
+
+  void nextTick(() => {
+    if (taskStore.pendingTaskCount + taskStore.inProgressTaskCount === 0) {
+      showCompletionClearToast();
+    }
+  });
 }
 
 async function openReminderToast(reminder: InAppReminder) {
@@ -1121,6 +1240,8 @@ onUnmounted(() => {
   }
   reminderToastTimers.forEach((timer) => clearTimeout(timer));
   reminderToastTimers.clear();
+  completionEffectTimers.forEach((timer) => clearTimeout(timer));
+  completionEffectTimers.clear();
 });
 
 watch(
@@ -1382,6 +1503,141 @@ watch(
 .search-state-bar__btn--primary {
   color: var(--primary);
   border-color: color-mix(in srgb, var(--primary) 22%, var(--border));
+}
+
+.completion-effect-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.completion-burst {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.completion-burst__ring {
+  position: absolute;
+  left: -13px;
+  top: -13px;
+  width: 26px;
+  height: 26px;
+  border: 2px solid color-mix(in srgb, var(--status-done, #20bf63) 62%, transparent);
+  border-radius: 999px;
+  animation: completion-ring-pulse 720ms ease-out forwards;
+}
+
+.completion-burst__particle {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--particle-color, var(--primary));
+  opacity: 0;
+  animation: completion-particle-burst 720ms var(--ease-emphasized, cubic-bezier(0.16, 1, 0.3, 1)) forwards;
+  animation-delay: var(--delay, 0ms);
+}
+
+.completion-burst__particle.round {
+  border-radius: 999px;
+}
+
+.completion-clear-toast {
+  position: absolute;
+  left: 50%;
+  top: 116px;
+  min-width: 170px;
+  padding: 10px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0.5px solid color-mix(in srgb, var(--status-done, #20bf63) 28%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-solid) 94%, transparent);
+  box-shadow: 0 14px 42px color-mix(in srgb, var(--status-done, #20bf63) 18%, transparent);
+  color: var(--status-done, #20bf63);
+  font-size: 13px;
+  transform: translateX(-50%);
+  animation: completion-clear-pop 1700ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.completion-clear-toast__check {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--status-done, #20bf63);
+}
+
+.completion-clear-toast__check::before {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid white;
+  border-bottom: 2px solid white;
+  transform: rotate(-45deg) translate(1px, -1px);
+  border-radius: 1px;
+}
+
+@keyframes completion-ring-pulse {
+  0% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.35);
+  }
+}
+
+@keyframes completion-particle-burst {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.45) rotate(0);
+  }
+  16% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx), var(--dy)) scale(1) rotate(var(--rotate));
+  }
+}
+
+@keyframes completion-clear-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -10px) scale(0.94);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  76% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -8px) scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .completion-burst,
+  .completion-clear-toast {
+    display: none;
+  }
 }
 
 .search-overlay {

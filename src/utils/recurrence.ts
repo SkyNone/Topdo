@@ -127,6 +127,52 @@ function getNextIndex(tasks: Task[], parentId: string): number {
   return max + 1;
 }
 
+function recurrenceRuleKey(rule: unknown): string {
+  const parsed = parseRecurrenceRule(rule);
+  return parsed ? JSON.stringify(parsed) : '';
+}
+
+function recurrenceParentCandidates(template: Task): Set<string> {
+  return new Set([template.record_id, template.id].filter(Boolean) as string[]);
+}
+
+function occurrenceDateKey(task: Pick<Task, 'due_date' | 'created_at'>, fallback = ''): string {
+  const due = splitDueDate(task.due_date);
+  return due.date || createdAtDateKey(task.created_at || '') || fallback;
+}
+
+export function hasRecurringOccurrence(
+  tasks: Task[],
+  template: Task,
+  occurrenceDate: string
+): boolean {
+  const parentIds = recurrenceParentCandidates(template);
+  const templateRuleKey = recurrenceRuleKey(template.recurrence_rule);
+
+  return tasks.some((task) => {
+    if (occurrenceDateKey(task) !== occurrenceDate) return false;
+    if (parentIds.has(task.record_id) || (task.id && parentIds.has(task.id))) return true;
+
+    const parentId = (task.recurrence_parent_id || '').trim();
+    if (!parentId) return false;
+    if (parentIds.has(parentId)) return true;
+
+    // 兼容早期 temp parent id 被远端 record_id 替换前创建的实例。
+    return task.name === template.name && recurrenceRuleKey(task.recurrence_rule) === templateRuleKey;
+  });
+}
+
+function getRecurringOccurrenceCount(tasks: Task[], template: Task): number {
+  const parentIds = recurrenceParentCandidates(template);
+  const templateRuleKey = recurrenceRuleKey(template.recurrence_rule);
+  return tasks.filter((task) => {
+    const parentId = (task.recurrence_parent_id || '').trim();
+    if (!parentId) return false;
+    if (parentIds.has(parentId)) return true;
+    return task.name === template.name && recurrenceRuleKey(task.recurrence_rule) === templateRuleKey;
+  }).length;
+}
+
 function occurrenceDueDate(templateDueDate: string | undefined, todayStr: string): string {
   const parts = splitDueDate(templateDueDate);
   if (!parts.date) return todayStr;
@@ -148,17 +194,14 @@ export function generateRecurringInstances(tasks: Task[], today = new Date()): R
     if (!rule) continue;
     if (rule.endDate && rule.endDate < todayStr) continue;
     if (rule.endCount) {
-      const existingCount = tasks.filter((task) => task.recurrence_parent_id === (template.id || template.record_id)).length;
+      const existingCount = getRecurringOccurrenceCount(tasks, template);
       if (existingCount >= rule.endCount) continue;
     }
     const anchorKey = recurrenceAnchorKey(template);
     if (!anchorKey || !matchesRule(today, rule, anchorKey)) continue;
 
-    const templateId = template.id || template.record_id;
-    const alreadyExists = tasks.some(
-      (task) => task.recurrence_parent_id === templateId && createdAtDateKey(task.created_at) === todayStr
-    );
-    if (alreadyExists) continue;
+    const templateId = template.record_id || template.id || '';
+    if (!templateId || hasRecurringOccurrence(tasks, template, todayStr)) continue;
 
     instances.push({
       template,

@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { invoke } from '@tauri-apps/api/core';
 import type { SubTask, SyncTasksResult, Task } from '../types';
 import { log } from '../utils/logger';
-import { generateRecurringInstances, parseRecurrenceRule } from '../utils/recurrence';
+import { generateRecurringInstances, hasRecurringOccurrence, parseRecurrenceRule } from '../utils/recurrence';
 
 export type AppMode = 'local' | 'feishu';
 export type SyncState = 'idle' | 'loading' | 'success' | 'error' | 'pending';
@@ -66,6 +66,7 @@ const COMPLETED_HISTORY_WINDOW_DAYS = 30;
 const COMPLETED_HISTORY_WINDOW_MS = COMPLETED_HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const localStatusSaveQueue = new Map<string, Promise<void>>();
+let recurringInitPromise: Promise<void> | null = null;
 
 function nowUnixSecondsString(): string {
   return Math.floor(Date.now() / 1000).toString();
@@ -831,21 +832,39 @@ export const useTaskStore = defineStore('task', {
     },
 
     async initRecurringTasks() {
-      const instances = generateRecurringInstances(this.tasks).filter((instance) => {
-        const occurrenceDate = dueDateKey(instance.due_date) || dayKey(new Date());
-        return !isSkippedRecurrence(instance.recurrence_parent_id, occurrenceDate);
-      });
-      for (const instance of instances) {
-        await this.createTask({
-          name: instance.name,
-          priority: instance.priority,
-          status: instance.status,
-          due_date: instance.due_date,
-          recurrence_parent_id: instance.recurrence_parent_id,
-          recurrence_index: instance.recurrence_index,
-          recurrence_rule: instance.recurrence_rule,
-          reminder_before: instance.reminder_before
+      if (recurringInitPromise) return recurringInitPromise;
+
+      recurringInitPromise = (async () => {
+        const instances = generateRecurringInstances(this.tasks).filter((instance) => {
+          const occurrenceDate = dueDateKey(instance.due_date) || dayKey(new Date());
+          return !isSkippedRecurrence(instance.recurrence_parent_id, occurrenceDate);
         });
+        for (const instance of instances) {
+          const occurrenceDate = dueDateKey(instance.due_date) || dayKey(new Date());
+          if (
+            isSkippedRecurrence(instance.recurrence_parent_id, occurrenceDate) ||
+            hasRecurringOccurrence(this.tasks, instance.template, occurrenceDate)
+          ) {
+            continue;
+          }
+
+          await this.createTask({
+            name: instance.name,
+            priority: instance.priority,
+            status: instance.status,
+            due_date: instance.due_date,
+            recurrence_parent_id: instance.recurrence_parent_id,
+            recurrence_index: instance.recurrence_index,
+            recurrence_rule: instance.recurrence_rule,
+            reminder_before: instance.reminder_before
+          });
+        }
+      })();
+
+      try {
+        await recurringInitPromise;
+      } finally {
+        recurringInitPromise = null;
       }
     },
 

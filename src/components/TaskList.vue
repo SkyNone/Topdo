@@ -109,6 +109,7 @@
             @error="emit('error', $event)"
             @focus="setFocusedTask"
             @request-delete="emit('request-delete', $event)"
+            @completed="emit('task-completed', $event)"
           />
         </div>
         <div
@@ -167,6 +168,7 @@ const emit = defineEmits<{
   (event: 'request-delete', task: Task): void;
   (event: 'create-template', template: QuickTaskTemplate): void;
   (event: 'create-habit-template'): void;
+  (event: 'task-completed', payload: { recordId: string; name: string; x: number; y: number }): void;
 }>();
 
 const store = useTaskStore();

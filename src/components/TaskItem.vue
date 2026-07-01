@@ -14,6 +14,7 @@
       <div v-if="priorityColor" class="priority-bar" :style="{ background: priorityColor }"></div>
 
       <button
+        ref="checkboxRef"
         type="button"
         class="task-checkbox"
         :class="checkboxClass"
@@ -349,6 +350,7 @@ const emit = defineEmits<{
   (event: 'error', message: string): void;
   (event: 'request-delete', task: Task): void;
   (event: 'focus', recordId: string): void;
+  (event: 'completed', payload: { recordId: string; name: string; x: number; y: number }): void;
 }>();
 
 const store = useTaskStore();
@@ -358,6 +360,7 @@ const inlineNameDraft = ref(props.task.name || '');
 const inlineEditing = ref(false);
 const inlineNameInputRef = ref<HTMLInputElement | null>(null);
 const taskItemRootRef = ref<HTMLElement | null>(null);
+const checkboxRef = ref<HTMLButtonElement | null>(null);
 const notesDraft = ref(props.task.notes || '');
 const priorityDraft = ref(normalizePriorityDraft(props.task.priority));
 const newSubTaskText = ref('');
@@ -748,17 +751,38 @@ function formatTime(input: string): string {
 }
 
 async function onToggleStatus() {
+  const fromStatusKey = statusKey.value;
   const target = nextStatus(props.task.status);
+  const shouldCelebrate = fromStatusKey === 'in_progress' && displayStatus(target) === '已完成';
+  const anchor = getCompletionAnchor();
   statusAnimating.value = true;
   setTimeout(() => {
     statusAnimating.value = false;
   }, 200);
 
   try {
-    await store.updateTaskStatus(props.task.record_id, target);
+    const updatePromise = store.updateTaskStatus(props.task.record_id, target);
+    if (shouldCelebrate && anchor) {
+      emit('completed', {
+        recordId: props.task.record_id,
+        name: props.task.name || '未命名任务',
+        x: anchor.x,
+        y: anchor.y
+      });
+    }
+    await updatePromise;
   } catch (error) {
     emit('error', `状态更新失败：${String(error)}`);
   }
+}
+
+function getCompletionAnchor(): { x: number; y: number } | null {
+  const rect = checkboxRef.value?.getBoundingClientRect();
+  if (!rect) return null;
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2
+  };
 }
 
 async function onRetrySync() {

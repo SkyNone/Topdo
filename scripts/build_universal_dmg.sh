@@ -18,7 +18,7 @@ pnpm tauri build --target universal-apple-darwin --bundles app
 BUNDLE_BASE="$ROOT_DIR/src-tauri/target/universal-apple-darwin/release/bundle"
 DMG_DIR="$BUNDLE_BASE/dmg"
 MACOS_DIR="$BUNDLE_BASE/macos"
-HELPER_DMG_DIR="$ROOT_DIR/src-tauri/target/debug/bundle/dmg"
+HELPER_DMG_DIR="$DMG_DIR"
 BUNDLE_DMG_SH="$HELPER_DMG_DIR/bundle_dmg.sh"
 VOL_ICON="$HELPER_DMG_DIR/icon.icns"
 APP_PATH="$MACOS_DIR/$APP_NAME"

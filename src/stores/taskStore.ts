@@ -64,9 +64,11 @@ const MAX_TASK_TAGS = 5;
 const MAX_RECENT_TAGS = 5;
 const COMPLETED_HISTORY_WINDOW_DAYS = 30;
 const COMPLETED_HISTORY_WINDOW_MS = COMPLETED_HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const FEISHU_RECENT_WRITE_PROTECTION_MS = 30_000;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const localStatusSaveQueue = new Map<string, Promise<void>>();
 let recurringInitPromise: Promise<void> | null = null;
+const recentFeishuWritePatches = new Map<string, { patch: Partial<Task>; expiresAt: number }>();
 
 function nowUnixSecondsString(): string {
   return Math.floor(Date.now() / 1000).toString();
@@ -101,6 +103,31 @@ function mergeTask(base: Task, patch: Partial<Task>): Task {
     ...patch,
     updated_at: patch.updated_at ?? nowUnixSecondsString()
   };
+}
+
+function rememberRecentFeishuWrite(recordId: string, patch: Partial<Task>) {
+  const key = recordId.trim();
+  if (!key) return;
+  recentFeishuWritePatches.set(key, {
+    patch,
+    expiresAt: Date.now() + FEISHU_RECENT_WRITE_PROTECTION_MS
+  });
+}
+
+function applyRecentFeishuWritePatches(tasks: Task[]): Task[] {
+  const now = Date.now();
+  for (const [recordId, entry] of recentFeishuWritePatches.entries()) {
+    if (entry.expiresAt <= now) {
+      recentFeishuWritePatches.delete(recordId);
+    }
+  }
+  if (!recentFeishuWritePatches.size) return tasks;
+
+  return tasks.map((task) => {
+    const keys = [task.record_id, task.id, task.feishu_record_id].filter(Boolean) as string[];
+    const entry = keys.map((key) => recentFeishuWritePatches.get(key)).find(Boolean);
+    return entry ? { ...task, ...entry.patch } : task;
+  });
 }
 
 function fromFeishuPriority(priority: string): string {
@@ -1028,7 +1055,7 @@ export const useTaskStore = defineStore('task', {
         const normalized = Array.isArray(syncResult)
           ? { tasks: syncResult, sync_meta: { pending_count: 0, failed_count: 0, last_sync_at: '', last_error_summary: '' } }
           : syncResult;
-        this.setTasks(normalized.tasks);
+        this.setTasks(applyRecentFeishuWritePatches(normalized.tasks));
         this.setSyncMeta(normalized.sync_meta);
         this.lastSyncTime = Date.now();
         this.offlineMode = false;
@@ -1071,9 +1098,10 @@ export const useTaskStore = defineStore('task', {
 
       this.moveTaskToStatusTail(recordId, toStatus);
       const normalizedStatus = normalizeStatusLabel(toStatus);
+      const completedAt = completedAtForStatus(normalizedStatus, previous.completed_at);
       this.setTaskPatch(recordId, {
         status: normalizedStatus,
-        completed_at: completedAtForStatus(normalizedStatus, previous.completed_at),
+        completed_at: completedAt,
         sync_status: this.mode === 'feishu' ? 'pending' : 'synced'
       });
       const current = this.tasks.find((task) => task.record_id === recordId || task.id === recordId);
@@ -1188,11 +1216,15 @@ export const useTaskStore = defineStore('task', {
           return;
         }
 
+        rememberRecentFeishuWrite(recordId, {
+          status: normalizedStatus,
+          completed_at: completedAt,
+          sync_status: 'synced'
+        });
         this.setTaskPatch(recordId, { sync_status: 'synced' });
         this.statusSyncState[recordId] = 'success';
         this.offlineMode = false;
         this.lastSyncTime = Date.now();
-        this.scheduleSyncAfterWrite();
       } catch (error) {
         this.setTaskPatch(recordId, previous);
         this.tasks = previousTasks;
@@ -1293,11 +1325,11 @@ export const useTaskStore = defineStore('task', {
           return;
         }
 
+        rememberRecentFeishuWrite(recordId, { notes, sync_status: 'synced' });
         this.setTaskPatch(recordId, { sync_status: 'synced' });
         this.notesSyncState[recordId] = 'success';
         this.offlineMode = false;
         this.lastSyncTime = Date.now();
-        this.scheduleSyncAfterWrite();
       } catch (error) {
         this.setTaskPatch(recordId, previous);
         this.notesSyncState[recordId] = 'error';
@@ -1376,10 +1408,10 @@ export const useTaskStore = defineStore('task', {
           return;
         }
 
+        rememberRecentFeishuWrite(recordId, { name: trimmed, sync_status: 'synced' });
         this.setTaskPatch(recordId, { sync_status: 'synced' });
         this.offlineMode = false;
         this.lastSyncTime = Date.now();
-        this.scheduleSyncAfterWrite();
       } catch (error) {
         this.setTaskPatch(recordId, previous);
         log('API', '飞书报错', { error: String(error) });
@@ -1458,11 +1490,14 @@ export const useTaskStore = defineStore('task', {
           return;
         }
 
+        rememberRecentFeishuWrite(recordId, {
+          priority: normalizedPriority,
+          sync_status: 'synced'
+        });
         this.setTaskPatch(recordId, { sync_status: 'synced' });
         this.tasks = sortTasksByPolicy(this.tasks);
         this.offlineMode = false;
         this.lastSyncTime = Date.now();
-        this.scheduleSyncAfterWrite();
       } catch (error) {
         this.setTaskPatch(recordId, previous);
         this.tasks = sortTasksByPolicy(this.tasks);

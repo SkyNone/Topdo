@@ -145,6 +145,16 @@ struct FeishuConfig {
   folder_token: String,
   #[serde(default)]
   collaborator_email: String,
+  #[serde(default)]
+  tag_field_name: String,
+  #[serde(default)]
+  priority_field_name: String,
+  #[serde(default)]
+  priority_urgent_value: String,
+  #[serde(default)]
+  priority_important_value: String,
+  #[serde(default)]
+  priority_normal_value: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -275,6 +285,18 @@ struct ConfigPayload {
   folder_token: String,
   collaborator_email: String,
   has_secret: bool,
+  tag_field_name: String,
+  priority_field_name: String,
+  priority_urgent_value: String,
+  priority_important_value: String,
+  priority_normal_value: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct FeishuFieldPayload {
+  field_name: String,
+  field_type: i64,
+  options: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -623,7 +645,7 @@ fn normalize_task(mut task: Task) -> Task {
   task
 }
 
-fn to_feishu_priority_value(priority: &str) -> String {
+fn legacy_feishu_priority_value(priority: &str) -> String {
   match priority.trim() {
     "紧急" | "今日必做" | "🔴今日必做" | "🔴 今日必做" => "今日必做".to_string(),
     "重要" | "本周完成" | "🟡本周完成" | "🟠本周完成" | "🔵本周完成" | "🟡尽快完成" | "🟡重要不紧急" => {
@@ -634,6 +656,74 @@ fn to_feishu_priority_value(priority: &str) -> String {
     }
     "" => "自由安排".to_string(),
     other => other.to_string(),
+  }
+}
+
+fn configured_priority_field_name(config: &FeishuConfig) -> &str {
+  let value = config.priority_field_name.trim();
+  if value.is_empty() { "优先级" } else { value }
+}
+
+fn configured_tag_field_name(config: &FeishuConfig) -> &str {
+  let value = config.tag_field_name.trim();
+  if value.is_empty() { "标签" } else { value }
+}
+
+fn configured_priority_option<'a>(config: &'a FeishuConfig, priority: &str) -> &'a str {
+  let value = priority.trim();
+  let local_priority = if !config.priority_urgent_value.trim().is_empty()
+    && value == config.priority_urgent_value.trim()
+  {
+    "紧急"
+  } else if !config.priority_important_value.trim().is_empty()
+    && value == config.priority_important_value.trim()
+  {
+    "重要"
+  } else if !config.priority_normal_value.trim().is_empty()
+    && value == config.priority_normal_value.trim()
+  {
+    "普通"
+  } else {
+    match value {
+      "紧急" | "今日必做" | "🔴今日必做" | "🔴 今日必做" => "紧急",
+      "重要" | "本周完成" | "🟡本周完成" | "🟠本周完成" | "🔵本周完成" | "🟡尽快完成" | "🟡重要不紧急" => "重要",
+      _ => "普通",
+    }
+  };
+  match local_priority {
+    "紧急" => config.priority_urgent_value.trim(),
+    "重要" => config.priority_important_value.trim(),
+    _ => config.priority_normal_value.trim(),
+  }
+}
+
+fn to_feishu_priority_value(config: &FeishuConfig, priority: &str) -> String {
+  let configured = configured_priority_option(config, priority);
+  if configured.is_empty() {
+    legacy_feishu_priority_value(priority)
+  } else {
+    configured.to_string()
+  }
+}
+
+fn from_feishu_priority_value(config: &FeishuConfig, priority: &str) -> String {
+  let value = priority.trim();
+  if !config.priority_urgent_value.trim().is_empty() && value == config.priority_urgent_value.trim() {
+    return "紧急".to_string();
+  }
+  if !config.priority_important_value.trim().is_empty() && value == config.priority_important_value.trim() {
+    return "重要".to_string();
+  }
+  if !config.priority_normal_value.trim().is_empty() && value == config.priority_normal_value.trim() {
+    return "普通".to_string();
+  }
+
+  match legacy_feishu_priority_value(value).as_str() {
+    "今日必做" => "紧急".to_string(),
+    "本周完成" => "重要".to_string(),
+    "自由安排" => "普通".to_string(),
+    _ if value.is_empty() => "普通".to_string(),
+    _ => value.to_string(),
   }
 }
 
@@ -689,12 +779,29 @@ fn idempotency_token(seed: &str) -> String {
   )
 }
 
-fn feishu_tags_to_local_json(raw: &str) -> String {
-  serde_json::to_string(&normalize_tag_values(raw)).unwrap_or_else(|_| "[]".to_string())
+fn feishu_tags_value_to_local_json(value: Option<&Value>) -> String {
+  let tags = match value {
+    Some(Value::Array(values)) => values
+      .iter()
+      .map(value_to_display_string)
+      .filter(|item| !item.trim().is_empty())
+      .collect::<Vec<_>>(),
+    Some(value) => normalize_tag_values(&value_to_display_string(value)),
+    None => Vec::new(),
+  };
+  serde_json::to_string(&normalize_tag_values(
+    &serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()),
+  ))
+  .unwrap_or_else(|_| "[]".to_string())
 }
 
-fn local_tags_to_feishu_text(raw: &str) -> String {
-  normalize_tag_values(raw).join(", ")
+fn local_tags_to_feishu_value(config: &FeishuConfig, raw: &str) -> Value {
+  let tags = normalize_tag_values(raw);
+  if config.tag_field_name.trim().is_empty() {
+    Value::String(tags.join(", "))
+  } else {
+    Value::Array(tags.into_iter().map(Value::String).collect())
+  }
 }
 
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
@@ -1191,6 +1298,18 @@ fn normalize_loaded_config(mut cfg: AppConfig) -> AppConfig {
   if cfg.feishu.app_id.trim().is_empty() {
     cfg.feishu.app_id = cfg.app_id.trim().to_string();
   }
+  if cfg.feishu.priority_field_name.trim().is_empty() {
+    cfg.feishu.priority_field_name = "优先级".to_string();
+  }
+  if cfg.feishu.priority_urgent_value.trim().is_empty() {
+    cfg.feishu.priority_urgent_value = "今日必做".to_string();
+  }
+  if cfg.feishu.priority_important_value.trim().is_empty() {
+    cfg.feishu.priority_important_value = "本周完成".to_string();
+  }
+  if cfg.feishu.priority_normal_value.trim().is_empty() {
+    cfg.feishu.priority_normal_value = "自由安排".to_string();
+  }
 
   let normalized_sync = if cfg.sync_interval > 0 {
     cfg.sync_interval
@@ -1271,6 +1390,11 @@ fn load_app_config_from_file(app: &AppHandle) -> Result<AppConfig, String> {
           table_id: legacy.table_id,
           folder_token: String::new(),
           collaborator_email: String::new(),
+          tag_field_name: String::new(),
+          priority_field_name: "优先级".to_string(),
+          priority_urgent_value: "今日必做".to_string(),
+          priority_important_value: "本周完成".to_string(),
+          priority_normal_value: "自由安排".to_string(),
         },
         shortcut: ShortcutConfig {
           toggle_window: DEFAULT_TOGGLE_SHORTCUT.to_string(),
@@ -1637,6 +1761,9 @@ async fn fetch_remote_tasks(app: &AppHandle, filter_completed: bool) -> Result<V
     return Err("飞书记录未完整拉取，已停止本次同步".to_string());
   }
 
+  let priority_field_name = configured_priority_field_name(&config.feishu).to_string();
+  let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
+
   Ok(records
     .into_iter()
     .map(|record| {
@@ -1648,7 +1775,10 @@ async fn fetch_remote_tasks(app: &AppHandle, filter_completed: bool) -> Result<V
       record_id: rid.clone(),
       name: field_string(&record.fields, "任务名称"),
       status,
-      priority: field_string(&record.fields, "优先级"),
+      priority: from_feishu_priority_value(
+        &config.feishu,
+        &field_string(&record.fields, &priority_field_name),
+      ),
       task_type: field_string(&record.fields, "类型"),
       time_spent: field_string(&record.fields, "实际耗时(分钟)"),
       created_at: field_string(&record.fields, "任务创建时间"),
@@ -1657,7 +1787,7 @@ async fn fetch_remote_tasks(app: &AppHandle, filter_completed: bool) -> Result<V
       notes: field_string(&record.fields, "备注/收获"),
       sort_order: 0,
       sub_tasks: "[]".to_string(),
-      tags: feishu_tags_to_local_json(&field_string(&record.fields, "标签")),
+      tags: feishu_tags_value_to_local_json(record.fields.get(&tag_field_name)),
       due_date: String::new(),
       recurrence_rule: String::new(),
       recurrence_parent_id: String::new(),
@@ -1762,7 +1892,29 @@ fn insert_feishu_field_if_exists(
   }
 }
 
-async fn feishu_list_field_names(app: &AppHandle) -> Result<Vec<String>, String> {
+fn parse_feishu_field_options(item: &Value) -> Vec<String> {
+  item
+    .get("property")
+    .and_then(|property| property.get("options"))
+    .and_then(Value::as_array)
+    .map(|options| {
+      options
+        .iter()
+        .filter_map(|option| {
+          option
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| option.as_str())
+        })
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+    })
+    .unwrap_or_default()
+}
+
+async fn feishu_list_fields(app: &AppHandle) -> Result<Vec<FeishuFieldPayload>, String> {
   let config = load_app_config_from_file(app)?;
   let endpoint = format!(
     "https://open.feishu.cn/open-apis/bitable/v1/apps/{}/tables/{}/fields",
@@ -1774,60 +1926,97 @@ async fn feishu_list_field_names(app: &AppHandle) -> Result<Vec<String>, String>
     .build()
     .map_err(|err| format!("http client init failed: {err}"))?;
 
-  for attempt in 0..2 {
+  'token_attempts: for attempt in 0..2 {
     let token = get_tenant_access_token(app, attempt == 1).await?;
-    let response = client
-      .get(&endpoint)
-      .query(&[("page_size", "100")])
-      .header("Authorization", format!("Bearer {}", token))
-      .send()
-      .await
-      .map_err(|err| format!("request failed: {err}"))?;
-    let status = response.status();
-    let body = response
-      .text()
-      .await
-      .map_err(|err| format!("read response failed: {err}"))?;
+    let mut fields = Vec::new();
+    let mut page_token: Option<String> = None;
 
-    if !status.is_success() {
-      if let Ok(value) = serde_json::from_str::<Value>(&body) {
-        if let Some(code) = value.get("code").and_then(Value::as_i64) {
-          if is_token_invalid_code(code as i32) && attempt == 0 {
-            continue;
+    loop {
+      let mut query = vec![("page_size", "100".to_string())];
+      if let Some(value) = page_token.as_ref().filter(|value| !value.trim().is_empty()) {
+        query.push(("page_token", value.clone()));
+      }
+      let response = client
+        .get(&endpoint)
+        .query(&query)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|err| format!("request failed: {err}"))?;
+      let status = response.status();
+      let body = response
+        .text()
+        .await
+        .map_err(|err| format!("read response failed: {err}"))?;
+
+      if !status.is_success() {
+        if let Ok(value) = serde_json::from_str::<Value>(&body) {
+          if let Some(code) = value.get("code").and_then(Value::as_i64) {
+            if is_token_invalid_code(code as i32) && attempt == 0 {
+              continue 'token_attempts;
+            }
           }
         }
+        return Err(build_feishu_http_error(status, &body));
       }
-      return Err(build_feishu_http_error(status, &body));
-    }
 
-    let parsed: Value =
-      serde_json::from_str(&body).map_err(|err| format!("invalid response: {err}"))?;
-    let code = parsed.get("code").and_then(Value::as_i64).unwrap_or(-1);
-    if code != 0 {
-      if is_token_invalid_code(code as i32) && attempt == 0 {
-        continue;
+      let parsed: Value =
+        serde_json::from_str(&body).map_err(|err| format!("invalid response: {err}"))?;
+      let code = parsed.get("code").and_then(Value::as_i64).unwrap_or(-1);
+      if code != 0 {
+        if is_token_invalid_code(code as i32) && attempt == 0 {
+          continue 'token_attempts;
+        }
+        return Err(format!(
+          "飞书返回错误 code={} {}",
+          code,
+          parsed.get("msg").map(value_to_display_string).unwrap_or_default()
+        ));
       }
-      return Err(format!(
-        "飞书返回错误 code={} {}",
-        code,
-        parsed.get("msg").map(value_to_display_string).unwrap_or_default()
-      ));
-    }
 
-    let items = parsed
-      .get("data")
-      .and_then(|data| data.get("items"))
-      .and_then(Value::as_array)
-      .cloned()
-      .unwrap_or_default();
-    return Ok(items
-      .iter()
-      .filter_map(|item| item.get("field_name").and_then(Value::as_str))
-      .map(|name| name.to_string())
-      .collect());
+      let data = parsed.get("data").cloned().unwrap_or(Value::Null);
+      let items = data
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+      fields.extend(items.iter().filter_map(|item| {
+        let field_name = item.get("field_name")?.as_str()?.trim().to_string();
+        if field_name.is_empty() {
+          return None;
+        }
+        Some(FeishuFieldPayload {
+          field_name,
+          field_type: item.get("type").and_then(Value::as_i64).unwrap_or_default(),
+          options: parse_feishu_field_options(item),
+        })
+      }));
+
+      if !data.get("has_more").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(fields);
+      }
+      let next_page_token = data
+        .get("page_token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+      if next_page_token.is_empty() {
+        return Err("飞书字段分页返回缺少 page_token".to_string());
+      }
+      page_token = Some(next_page_token);
+    }
   }
 
   Err("刷新 token 后仍无法读取字段列表".to_string())
+}
+
+async fn feishu_list_field_names(app: &AppHandle) -> Result<Vec<String>, String> {
+  Ok(feishu_list_fields(app)
+    .await?
+    .into_iter()
+    .map(|field| field.field_name)
+    .collect())
 }
 
 async fn feishu_create_text_field(app: &AppHandle, field_name: &str) -> Result<(), String> {
@@ -1889,11 +2078,17 @@ async fn feishu_create_text_field(app: &AppHandle, field_name: &str) -> Result<(
 }
 
 async fn feishu_prepare_write_field_names(app: &AppHandle, ensure_tags: bool) -> Result<Vec<String>, String> {
+  let config = load_app_config_from_file(app)?;
   let mut field_names = feishu_list_field_names(app).await?;
+  let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
 
-  if ensure_tags && !has_feishu_field(&field_names, "标签") {
-    feishu_create_text_field(app, "标签").await?;
-    field_names.push("标签".to_string());
+  if ensure_tags && !has_feishu_field(&field_names, &tag_field_name) {
+    if config.feishu.tag_field_name.trim().is_empty() {
+      feishu_create_text_field(app, &tag_field_name).await?;
+      field_names.push(tag_field_name);
+    } else {
+      return Err(format!("已绑定的标签字段不存在：{}", tag_field_name));
+    }
   }
 
   Ok(field_names)
@@ -1922,18 +2117,30 @@ async fn feishu_create_record(app: &AppHandle, task: &Task) -> Result<String, St
       Vec::new()
     }
   };
+  let priority_field_name = configured_priority_field_name(&config.feishu).to_string();
+  let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
   let mut fields = json!({
     "任务名称": task.name,
     "状态": task.status,
-    "优先级": to_feishu_priority_value(&task.priority)
   });
+  if let Some(map) = fields.as_object_mut() {
+    map.insert(
+      priority_field_name,
+      Value::String(to_feishu_priority_value(&config.feishu, &task.priority)),
+    );
+  }
   insert_feishu_field_if_exists(&mut fields, &field_names, "类型", Value::String(task.task_type.clone()));
   if !task.notes.trim().is_empty() {
     insert_feishu_field_if_exists(&mut fields, &field_names, "备注/收获", Value::String(task.notes.clone()));
   }
-  let tags = local_tags_to_feishu_text(&task.tags);
-  if !tags.trim().is_empty() {
-    insert_feishu_field_if_exists(&mut fields, &field_names, "标签", Value::String(tags));
+  let tags = normalize_tag_values(&task.tags);
+  if !tags.is_empty() {
+    insert_feishu_field_if_exists(
+      &mut fields,
+      &field_names,
+      &tag_field_name,
+      local_tags_to_feishu_value(&config.feishu, &task.tags),
+    );
   }
 
   let mut force_refresh = false;
@@ -3578,6 +3785,10 @@ fn load_config(app: AppHandle) -> Result<ConfigPayload, String> {
   } else {
     cfg.mode.clone()
   };
+  let priority_field_name = configured_priority_field_name(&cfg.feishu).to_string();
+  let priority_urgent_value = to_feishu_priority_value(&cfg.feishu, "紧急");
+  let priority_important_value = to_feishu_priority_value(&cfg.feishu, "重要");
+  let priority_normal_value = to_feishu_priority_value(&cfg.feishu, "普通");
 
   Ok(ConfigPayload {
     mode,
@@ -3587,7 +3798,83 @@ fn load_config(app: AppHandle) -> Result<ConfigPayload, String> {
     folder_token: cfg.feishu.folder_token,
     collaborator_email: cfg.feishu.collaborator_email,
     has_secret: !cfg.feishu.encrypted_app_secret.trim().is_empty(),
+    tag_field_name: cfg.feishu.tag_field_name,
+    priority_field_name,
+    priority_urgent_value,
+    priority_important_value,
+    priority_normal_value,
   })
+}
+
+#[tauri::command]
+async fn get_feishu_fields(app: AppHandle) -> Result<Vec<FeishuFieldPayload>, String> {
+  feishu_list_fields(&app).await
+}
+
+#[tauri::command]
+async fn save_feishu_field_mapping(
+  app: AppHandle,
+  tag_field_name: String,
+  priority_field_name: String,
+  priority_urgent_value: String,
+  priority_important_value: String,
+  priority_normal_value: String,
+) -> Result<(), String> {
+  let tag_field_name = tag_field_name.trim().to_string();
+  let priority_field_name = priority_field_name.trim().to_string();
+  let priority_values = [
+    priority_urgent_value.trim().to_string(),
+    priority_important_value.trim().to_string(),
+    priority_normal_value.trim().to_string(),
+  ];
+
+  if priority_field_name.is_empty() {
+    return Err("请选择飞书优先级单选字段".to_string());
+  }
+  if priority_values.iter().any(|value| value.is_empty()) {
+    return Err("请为紧急、重要、普通分别选择飞书枚举值".to_string());
+  }
+  if priority_values[0] == priority_values[1]
+    || priority_values[0] == priority_values[2]
+    || priority_values[1] == priority_values[2]
+  {
+    return Err("三个优先级需要绑定不同的飞书枚举值".to_string());
+  }
+
+  let fields = feishu_list_fields(&app).await?;
+  if !tag_field_name.is_empty() {
+    let tag_field = fields
+      .iter()
+      .find(|field| field.field_name == tag_field_name)
+      .ok_or_else(|| format!("未找到标签字段：{}", tag_field_name))?;
+    if tag_field.field_type != 4 {
+      return Err("标签只能绑定飞书多选字段".to_string());
+    }
+  }
+
+  let priority_field = fields
+    .iter()
+    .find(|field| field.field_name == priority_field_name)
+    .ok_or_else(|| format!("未找到优先级字段：{}", priority_field_name))?;
+  if priority_field.field_type != 3 {
+    return Err("优先级只能绑定飞书单选字段".to_string());
+  }
+  for value in &priority_values {
+    if !priority_field.options.iter().any(|option| option == value) {
+      return Err(format!(
+        "枚举值“{}”不在字段“{}”中，请先在飞书中创建该选项",
+        value, priority_field_name
+      ));
+    }
+  }
+
+  let mut cfg = load_app_config_from_file(&app)?;
+  cfg.feishu.tag_field_name = tag_field_name;
+  cfg.feishu.priority_field_name = priority_field_name;
+  cfg.feishu.priority_urgent_value = priority_values[0].clone();
+  cfg.feishu.priority_important_value = priority_values[1].clone();
+  cfg.feishu.priority_normal_value = priority_values[2].clone();
+  save_app_config_to_file(&app, &cfg)
 }
 
 #[tauri::command]
@@ -4130,12 +4417,21 @@ async fn update_task(
   )
   .await?;
 
-  let remote_value = match field_name.trim() {
-    "优先级" => to_feishu_priority_value(&value),
-    "标签" => local_tags_to_feishu_text(&value),
-    _ => value.clone(),
+  let config = load_app_config_from_file(&app)?;
+  let (remote_field_name, remote_value) = match field_name.trim() {
+    "优先级" => (
+      configured_priority_field_name(&config.feishu).to_string(),
+      Value::String(to_feishu_priority_value(&config.feishu, &value)),
+    ),
+    "标签" => (
+      configured_tag_field_name(&config.feishu).to_string(),
+      local_tags_to_feishu_value(&config.feishu, &value),
+    ),
+    _ => (field_name.trim().to_string(), Value::String(value.clone())),
   };
-  let fields = json!({ field_name.trim(): remote_value });
+  let mut fields = serde_json::Map::new();
+  fields.insert(remote_field_name, remote_value);
+  let fields = Value::Object(fields);
   match feishu_update_record_fields(&app, record_id.trim(), fields).await {
     Ok(_) => {
       db_mark_synced(app, record_id).await?;
@@ -4176,6 +4472,8 @@ async fn sync_task_tags(
     });
   }
 
+  let config = load_app_config_from_file(&app)?;
+  let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
   let field_names = match feishu_prepare_write_field_names(&app, true).await {
     Ok(names) => names,
     Err(err) => {
@@ -4185,15 +4483,19 @@ async fn sync_task_tags(
       })
     }
   };
-  if !has_feishu_field(&field_names, "标签") {
+  if !has_feishu_field(&field_names, &tag_field_name) {
     return Ok(UpdateTaskResult {
       success: false,
-      message: "未能创建或找到飞书字段：标签".to_string(),
+      message: format!("未能创建或找到飞书标签字段：{}", tag_field_name),
     });
   }
 
-  let value = local_tags_to_feishu_text(&tags);
-  let fields = json!({ "标签": value });
+  let mut fields = serde_json::Map::new();
+  fields.insert(
+    tag_field_name,
+    local_tags_to_feishu_value(&config.feishu, &tags),
+  );
+  let fields = Value::Object(fields);
   match feishu_update_record_fields(&app, rid, fields).await {
     Ok(_) => Ok(UpdateTaskResult {
       success: true,
@@ -4335,7 +4637,11 @@ async fn sync_tasks(
       continue;
     }
 
-    let should_sync_tags = !normalize_tag_values(&task.tags).is_empty();
+    let config = load_app_config_from_file(&app)?;
+    let priority_field_name = configured_priority_field_name(&config.feishu).to_string();
+    let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
+    let should_sync_tags = !normalize_tag_values(&task.tags).is_empty()
+      || !config.feishu.tag_field_name.trim().is_empty();
     let field_names = match feishu_prepare_write_field_names(&app, should_sync_tags).await {
       Ok(names) => names,
       Err(err) if should_sync_tags => {
@@ -4352,15 +4658,24 @@ async fn sync_tasks(
     let mut fields = json!({
       "任务名称": task.name,
       "状态": task.status,
-      "优先级": to_feishu_priority_value(&task.priority),
     });
+    if let Some(map) = fields.as_object_mut() {
+      map.insert(
+        priority_field_name,
+        Value::String(to_feishu_priority_value(&config.feishu, &task.priority)),
+      );
+    }
     insert_feishu_field_if_exists(&mut fields, &field_names, "类型", Value::String(task.task_type.clone()));
     if !task.notes.trim().is_empty() {
       insert_feishu_field_if_exists(&mut fields, &field_names, "备注/收获", Value::String(task.notes.clone()));
     }
-    let tags = local_tags_to_feishu_text(&task.tags);
-    if !tags.trim().is_empty() {
-      insert_feishu_field_if_exists(&mut fields, &field_names, "标签", Value::String(tags));
+    if has_feishu_field(&field_names, &tag_field_name) {
+      insert_feishu_field_if_exists(
+        &mut fields,
+        &field_names,
+        &tag_field_name,
+        local_tags_to_feishu_value(&config.feishu, &task.tags),
+      );
     }
 
     match feishu_update_record_fields(&app, &task.record_id, fields).await {
@@ -4444,6 +4759,8 @@ pub fn run() {
       open_export_folder,
       save_config,
       load_config,
+      get_feishu_fields,
+      save_feishu_field_mapping,
       get_shortcut_config,
       set_shortcut_config,
       get_mode_shortcut_config,
@@ -4483,4 +4800,64 @@ pub fn run() {
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn mapped_feishu_config() -> FeishuConfig {
+    FeishuConfig {
+      tag_field_name: "业务标签".to_string(),
+      priority_field_name: "任务等级".to_string(),
+      priority_urgent_value: "P0".to_string(),
+      priority_important_value: "P1".to_string(),
+      priority_normal_value: "P2".to_string(),
+      ..FeishuConfig::default()
+    }
+  }
+
+  #[test]
+  fn priority_mapping_is_bidirectional() {
+    let config = mapped_feishu_config();
+    assert_eq!(to_feishu_priority_value(&config, "紧急"), "P0");
+    assert_eq!(to_feishu_priority_value(&config, "重要"), "P1");
+    assert_eq!(to_feishu_priority_value(&config, "普通"), "P2");
+    assert_eq!(to_feishu_priority_value(&config, "P0"), "P0");
+    assert_eq!(from_feishu_priority_value(&config, "P0"), "紧急");
+    assert_eq!(from_feishu_priority_value(&config, "P1"), "重要");
+    assert_eq!(from_feishu_priority_value(&config, "P2"), "普通");
+  }
+
+  #[test]
+  fn bound_tags_use_multi_select_array() {
+    let config = mapped_feishu_config();
+    assert_eq!(
+      local_tags_to_feishu_value(&config, r#"["需求","oncall"]"#),
+      json!(["需求", "oncall"])
+    );
+    assert_eq!(
+      feishu_tags_value_to_local_json(Some(&json!(["需求", "oncall"]))),
+      r#"["需求","oncall"]"#
+    );
+  }
+
+  #[test]
+  fn legacy_tags_remain_text() {
+    let config = FeishuConfig::default();
+    assert_eq!(
+      local_tags_to_feishu_value(&config, r#"["需求","oncall"]"#),
+      Value::String("需求, oncall".to_string())
+    );
+  }
+
+  #[test]
+  fn field_options_are_read_from_feishu_property() {
+    let field = json!({
+      "field_name": "任务等级",
+      "type": 3,
+      "property": { "options": [{ "name": "P0" }, { "name": "P1" }] }
+    });
+    assert_eq!(parse_feishu_field_options(&field), vec!["P0", "P1"]);
+  }
 }

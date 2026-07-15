@@ -150,15 +150,6 @@ function fromFeishuPriority(priority: string): string {
   return map[priority] || priority || '普通';
 }
 
-function toFeishuPriority(priority: string): string {
-  const map: Record<string, string> = {
-    '紧急': '今日必做',
-    '重要': '本周完成',
-    '普通': '自由安排'
-  };
-  return map[priority] || priority;
-}
-
 function normalizePriority(priority: string): string {
   const value = (priority || '').trim();
   return fromFeishuPriority(value);
@@ -631,6 +622,7 @@ export const useTaskStore = defineStore('task', {
 
     setTasks(tasks: Task[]) {
       this.tasks = hydrateRecurringInstanceRules(tasks.map(normalizeTask));
+      this.rememberTags(this.tasks.flatMap((task) => normalizeTags(task.tags)));
     },
 
     setSyncMeta(payload?: SyncTasksResult['sync_meta']) {
@@ -1444,7 +1436,7 @@ export const useTaskStore = defineStore('task', {
           record_id: remoteRecordId,
           fieldName: '优先级',
           field_name: '优先级',
-          value: toFeishuPriority(normalizedPriority)
+          value: normalizedPriority
         });
 
         log('API', '飞书返回', { status: result.success ? 200 : 500, data: result });
@@ -1516,7 +1508,6 @@ export const useTaskStore = defineStore('task', {
       if (!trimmed) throw new Error('任务名称不能为空');
 
       const normalizedPriority = normalizePriority(taskInput.priority || '普通');
-      const feishuPriority = toFeishuPriority(normalizedPriority);
       const normalizedType =
         this.mode === 'local'
           ? (taskInput.task_type || '日常事务').trim() || '日常事务'
@@ -1657,19 +1648,18 @@ export const useTaskStore = defineStore('task', {
         }
 
         const syncField = async (fieldName: string, value: string) => {
-          const fieldValue = fieldName === '优先级' ? toFeishuPriority(value) : value;
           const fieldResult = await invoke<UpdateTaskResult>('update_task', {
             recordId: result.record_id,
             record_id: result.record_id,
             fieldName,
             field_name: fieldName,
-            value: fieldValue
+            value
           });
           if (!fieldResult.success) throw new Error(fieldResult.message || `${fieldName} 同步失败`);
         };
 
         try {
-          await syncField('优先级', feishuPriority);
+          await syncField('优先级', normalizedPriority);
           if (normalizedStatus && normalizedStatus !== '待处理') await syncField('状态', normalizedStatus);
         } catch (error) {
           const message = `新任务字段同步失败：${String(error)}`;

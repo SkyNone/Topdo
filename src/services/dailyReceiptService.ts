@@ -18,6 +18,7 @@ export interface DailyReceiptData {
   items: DailyReceiptItem[];
   remainingCount: number;
   tags: string[];
+  encouragement: string;
 }
 
 const MAX_VISIBLE_ITEMS = 5;
@@ -26,14 +27,29 @@ function localDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function dateFromTimestamp(raw: string): Date | null {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    const milliseconds = numeric > 1e12 ? numeric : numeric * 1000;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function dateKeyFromTimestamp(raw: string): string {
   const value = String(raw || '').trim();
   if (!value) return '';
   if (/^\d{4}-\d{2}-\d{2}/.test(value) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(value)) {
     return value.slice(0, 10);
   }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value.slice(0, 10) : localDateKey(date);
+  const date = dateFromTimestamp(value);
+  return date ? localDateKey(date) : '';
 }
 
 function timeFromTimestamp(raw: string): string {
@@ -42,8 +58,8 @@ function timeFromTimestamp(raw: string): string {
   if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(value) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(value)) {
     return value.slice(11, 16);
   }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
+  const date = dateFromTimestamp(value);
+  if (!date) return '';
   return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
 
@@ -59,6 +75,15 @@ function isFocusPriority(priority: string): boolean {
 function normalizeTags(tags: unknown): string[] {
   if (!Array.isArray(tags)) return [];
   return tags.map((tag) => String(tag || '').trim()).filter(Boolean);
+}
+
+export function dailyReceiptEncouragement(totalCount: number): string {
+  if (totalCount <= 0) return '今天也可以从一件小事开始。';
+  if (totalCount === 1) return '第一件完成了，今天已经启动。';
+  if (totalCount <= 3) return '节奏起来了，继续保持。';
+  if (totalCount <= 6) return '推进得很扎实，今天很有收获。';
+  if (totalCount <= 9) return '高效的一天，你完成了不少事情。';
+  return '今日火力全开，值得给自己一个大大的肯定。';
 }
 
 export function buildDailyReceiptData(
@@ -94,7 +119,8 @@ export function buildDailyReceiptData(
     streak,
     items: allItems.slice(0, MAX_VISIBLE_ITEMS),
     remainingCount: Math.max(0, allItems.length - MAX_VISIBLE_ITEMS),
-    tags
+    tags,
+    encouragement: dailyReceiptEncouragement(allItems.length)
   };
 }
 
@@ -108,7 +134,7 @@ export function buildDailyReceiptText(data: DailyReceiptData): string {
   if (data.remainingCount > 0) lines.push(`… 另有 ${data.remainingCount} 项已完成`);
   lines.push('', `重点任务 ${data.focusCount} · 习惯打卡 ${data.habitChecked}/${data.habitTotal} · 连续完成 ${data.streak} 天`);
   if (data.tags.length) lines.push(`今日标签：${data.tags.join(' · ')}`);
-  lines.push('', '今天推进的每一步，都算数。');
+  lines.push('', data.encouragement);
   return lines.join('\n');
 }
 
@@ -249,7 +275,7 @@ export async function renderDailyReceiptPng(data: DailyReceiptData): Promise<Blo
   }
 
   drawDashedLine(context, 95, 1075, 655);
-  drawText(context, '今天推进的每一步，都算数。', 375, 1115, { font: '500 21px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#55555a', align: 'center' });
+  drawText(context, data.encouragement, 375, 1115, { font: '500 21px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#55555a', align: 'center' });
   return canvasToBlob(canvas);
 }
 

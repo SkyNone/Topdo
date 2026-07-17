@@ -621,9 +621,6 @@ fn normalize_task(mut task: Task) -> Task {
   if task.sub_tasks.trim().is_empty() {
     task.sub_tasks = "[]".to_string();
   }
-  if task.tags.trim().is_empty() {
-    task.tags = "[]".to_string();
-  }
   if task.recurrence_rule.trim().is_empty() {
     task.recurrence_rule = String::new();
   }
@@ -669,53 +666,66 @@ fn configured_tag_field_name(config: &FeishuConfig) -> &str {
   if value.is_empty() { "标签" } else { value }
 }
 
-fn configured_priority_option<'a>(config: &'a FeishuConfig, priority: &str) -> &'a str {
-  let value = priority.trim();
-  let local_priority = if !config.priority_urgent_value.trim().is_empty()
-    && value == config.priority_urgent_value.trim()
-  {
-    "紧急"
-  } else if !config.priority_important_value.trim().is_empty()
-    && value == config.priority_important_value.trim()
-  {
-    "重要"
-  } else if !config.priority_normal_value.trim().is_empty()
-    && value == config.priority_normal_value.trim()
-  {
-    "普通"
-  } else {
-    match value {
-      "紧急" | "今日必做" | "🔴今日必做" | "🔴 今日必做" => "紧急",
-      "重要" | "本周完成" | "🟡本周完成" | "🟠本周完成" | "🔵本周完成" | "🟡尽快完成" | "🟡重要不紧急" => "重要",
-      _ => "普通",
+fn parse_priority_mapping_values(raw: &str) -> Vec<String> {
+  let value = raw.trim();
+  if value.is_empty() {
+    return Vec::new();
+  }
+
+  let parsed = serde_json::from_str::<Vec<String>>(value).unwrap_or_else(|_| vec![value.to_string()]);
+  let mut normalized = Vec::new();
+  for item in parsed {
+    let option = item.trim();
+    if !option.is_empty() && !normalized.iter().any(|existing| existing == option) {
+      normalized.push(option.to_string());
     }
-  };
-  match local_priority {
-    "紧急" => config.priority_urgent_value.trim(),
-    "重要" => config.priority_important_value.trim(),
-    _ => config.priority_normal_value.trim(),
+  }
+  normalized
+}
+
+fn priority_mapping_values(config: &FeishuConfig, priority: &str) -> Vec<String> {
+  match priority {
+    "紧急" => parse_priority_mapping_values(&config.priority_urgent_value),
+    "重要" => parse_priority_mapping_values(&config.priority_important_value),
+    _ => parse_priority_mapping_values(&config.priority_normal_value),
   }
 }
 
-fn to_feishu_priority_value(config: &FeishuConfig, priority: &str) -> String {
-  let configured = configured_priority_option(config, priority);
-  if configured.is_empty() {
-    legacy_feishu_priority_value(priority)
-  } else {
-    configured.to_string()
+fn configured_local_priority(config: &FeishuConfig, value: &str) -> Option<&'static str> {
+  let value = value.trim();
+  if priority_mapping_values(config, "紧急").iter().any(|option| option == value) {
+    return Some("紧急");
   }
+  if priority_mapping_values(config, "重要").iter().any(|option| option == value) {
+    return Some("重要");
+  }
+  if priority_mapping_values(config, "普通").iter().any(|option| option == value) {
+    return Some("普通");
+  }
+  None
+}
+
+fn to_feishu_priority_value(config: &FeishuConfig, priority: &str) -> String {
+  let value = priority.trim();
+  if configured_local_priority(config, value).is_some() {
+    return value.to_string();
+  }
+
+  let local_priority = match value {
+    "紧急" | "今日必做" | "🔴今日必做" | "🔴 今日必做" => "紧急",
+    "重要" | "本周完成" | "🟡本周完成" | "🟠本周完成" | "🔵本周完成" | "🟡尽快完成" | "🟡重要不紧急" => "重要",
+    _ => "普通",
+  };
+  priority_mapping_values(config, local_priority)
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| legacy_feishu_priority_value(priority))
 }
 
 fn from_feishu_priority_value(config: &FeishuConfig, priority: &str) -> String {
   let value = priority.trim();
-  if !config.priority_urgent_value.trim().is_empty() && value == config.priority_urgent_value.trim() {
-    return "紧急".to_string();
-  }
-  if !config.priority_important_value.trim().is_empty() && value == config.priority_important_value.trim() {
-    return "重要".to_string();
-  }
-  if !config.priority_normal_value.trim().is_empty() && value == config.priority_normal_value.trim() {
-    return "普通".to_string();
+  if let Some(local_priority) = configured_local_priority(config, value) {
+    return local_priority.to_string();
   }
 
   match legacy_feishu_priority_value(value).as_str() {
@@ -795,12 +805,15 @@ fn feishu_tags_value_to_local_json(value: Option<&Value>) -> String {
   .unwrap_or_else(|_| "[]".to_string())
 }
 
-fn local_tags_to_feishu_value(config: &FeishuConfig, raw: &str) -> Value {
+fn local_tags_to_feishu_value(raw: &str, field_type: i64) -> Result<Value, String> {
   let tags = normalize_tag_values(raw);
-  if config.tag_field_name.trim().is_empty() {
-    Value::String(tags.join(", "))
-  } else {
-    Value::Array(tags.into_iter().map(Value::String).collect())
+  if tags.is_empty() {
+    return Ok(Value::Null);
+  }
+  match field_type {
+    1 => Ok(Value::String(tags.join(", "))),
+    4 => Ok(Value::Array(tags.into_iter().map(Value::String).collect())),
+    _ => Err("标签只能同步到飞书文本或多选字段".to_string()),
   }
 }
 
@@ -967,7 +980,7 @@ fn upsert_task(conn: &Connection, task: &Task) -> Result<(), String> {
         notes=CASE WHEN tasks.source = 'feishu' AND tasks.sync_status IN ('pending', 'failed') AND excluded.source = 'feishu' THEN tasks.notes ELSE excluded.notes END,
         sort_order=excluded.sort_order,
         sub_tasks=CASE WHEN excluded.source = 'feishu' AND excluded.sub_tasks = '[]' THEN tasks.sub_tasks ELSE excluded.sub_tasks END,
-        tags=CASE WHEN excluded.source = 'feishu' AND excluded.tags = '[]' THEN tasks.tags ELSE excluded.tags END,
+        tags=CASE WHEN excluded.source = 'feishu' AND excluded.tags = '' THEN tasks.tags ELSE excluded.tags END,
         due_date=CASE WHEN excluded.source = 'feishu' AND excluded.due_date = '' THEN tasks.due_date ELSE excluded.due_date END,
         recurrence_rule=CASE WHEN excluded.source = 'feishu' AND excluded.recurrence_rule = '' THEN tasks.recurrence_rule ELSE excluded.recurrence_rule END,
         recurrence_parent_id=CASE WHEN excluded.source = 'feishu' AND excluded.recurrence_parent_id = '' THEN tasks.recurrence_parent_id ELSE excluded.recurrence_parent_id END,
@@ -1787,7 +1800,10 @@ async fn fetch_remote_tasks(app: &AppHandle, filter_completed: bool) -> Result<V
       notes: field_string(&record.fields, "备注/收获"),
       sort_order: 0,
       sub_tasks: "[]".to_string(),
-      tags: feishu_tags_value_to_local_json(record.fields.get(&tag_field_name)),
+      tags: match record.fields.get(&tag_field_name) {
+        Some(value) => feishu_tags_value_to_local_json(Some(value)),
+        None => String::new(),
+      },
       due_date: String::new(),
       recurrence_rule: String::new(),
       recurrence_parent_id: String::new(),
@@ -2011,14 +2027,6 @@ async fn feishu_list_fields(app: &AppHandle) -> Result<Vec<FeishuFieldPayload>, 
   Err("刷新 token 后仍无法读取字段列表".to_string())
 }
 
-async fn feishu_list_field_names(app: &AppHandle) -> Result<Vec<String>, String> {
-  Ok(feishu_list_fields(app)
-    .await?
-    .into_iter()
-    .map(|field| field.field_name)
-    .collect())
-}
-
 async fn feishu_create_text_field(app: &AppHandle, field_name: &str) -> Result<(), String> {
   let config = load_app_config_from_file(app)?;
   let endpoint = format!(
@@ -2077,21 +2085,33 @@ async fn feishu_create_text_field(app: &AppHandle, field_name: &str) -> Result<(
   Err("刷新 token 后仍无法创建字段".to_string())
 }
 
-async fn feishu_prepare_write_field_names(app: &AppHandle, ensure_tags: bool) -> Result<Vec<String>, String> {
+fn feishu_field_names(fields: &[FeishuFieldPayload]) -> Vec<String> {
+  fields.iter().map(|field| field.field_name.clone()).collect()
+}
+
+fn feishu_tag_field<'a>(fields: &'a [FeishuFieldPayload], field_name: &str) -> Option<&'a FeishuFieldPayload> {
+  fields.iter().find(|field| field.field_name == field_name)
+}
+
+async fn feishu_prepare_write_fields(app: &AppHandle, ensure_tags: bool) -> Result<Vec<FeishuFieldPayload>, String> {
   let config = load_app_config_from_file(app)?;
-  let mut field_names = feishu_list_field_names(app).await?;
+  let mut fields = feishu_list_fields(app).await?;
   let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
 
-  if ensure_tags && !has_feishu_field(&field_names, &tag_field_name) {
+  if ensure_tags && feishu_tag_field(&fields, &tag_field_name).is_none() {
     if config.feishu.tag_field_name.trim().is_empty() {
       feishu_create_text_field(app, &tag_field_name).await?;
-      field_names.push(tag_field_name);
+      fields.push(FeishuFieldPayload {
+        field_name: tag_field_name,
+        field_type: 1,
+        options: Vec::new(),
+      });
     } else {
       return Err(format!("已绑定的标签字段不存在：{}", tag_field_name));
     }
   }
 
-  Ok(field_names)
+  Ok(fields)
 }
 
 async fn feishu_create_record(app: &AppHandle, task: &Task) -> Result<String, String> {
@@ -2109,14 +2129,15 @@ async fn feishu_create_record(app: &AppHandle, task: &Task) -> Result<String, St
     .map_err(|err| format!("http client init failed: {err}"))?;
 
   let should_sync_tags = !normalize_tag_values(&task.tags).is_empty();
-  let field_names = match feishu_prepare_write_field_names(app, should_sync_tags).await {
-    Ok(names) => names,
+  let write_fields = match feishu_prepare_write_fields(app, should_sync_tags).await {
+    Ok(fields) => fields,
     Err(err) if should_sync_tags => return Err(err),
     Err(err) => {
       eprintln!("[Rust] list feishu fields failed, use core fields only: {}", err);
       Vec::new()
     }
   };
+  let field_names = feishu_field_names(&write_fields);
   let priority_field_name = configured_priority_field_name(&config.feishu).to_string();
   let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
   let mut fields = json!({
@@ -2135,12 +2156,14 @@ async fn feishu_create_record(app: &AppHandle, task: &Task) -> Result<String, St
   }
   let tags = normalize_tag_values(&task.tags);
   if !tags.is_empty() {
-    insert_feishu_field_if_exists(
-      &mut fields,
-      &field_names,
-      &tag_field_name,
-      local_tags_to_feishu_value(&config.feishu, &task.tags),
-    );
+    if let Some(tag_field) = feishu_tag_field(&write_fields, &tag_field_name) {
+      insert_feishu_field_if_exists(
+        &mut fields,
+        &field_names,
+        &tag_field_name,
+        local_tags_to_feishu_value(&task.tags, tag_field.field_type)?,
+      );
+    }
   }
 
   let mut force_refresh = false;
@@ -2552,7 +2575,7 @@ async fn db_get_pending_tasks(app: AppHandle) -> Result<Vec<Task>, String> {
       .prepare(
         "SELECT record_id, id, name, status, priority, task_type, time_spent, created_at, updated_at, completed_at, notes, sort_order, sub_tasks, tags, due_date, recurrence_rule, recurrence_parent_id, recurrence_index, reminder_before, reminder_notified, source, feishu_record_id, sync_status, last_synced_at, retry_count, last_error, last_retry_at
          FROM tasks
-         WHERE sync_status IN ('pending', 'failed') AND source = 'feishu'
+         WHERE sync_status = 'pending' AND source = 'feishu'
          ORDER BY updated_at ASC",
       )
       .map_err(|err| format!("prepare pending query failed: {err}"))?;
@@ -2570,6 +2593,27 @@ async fn db_get_pending_tasks(app: AppHandle) -> Result<Vec<Task>, String> {
   })
   .await
   .map_err(|err| format!("db task join failed: {err}"))?
+}
+
+async fn db_mark_task_pending_for_retry(app: AppHandle, record_id: String) -> Result<(), String> {
+  let db_path = db_file_path(&app)?;
+  tokio::task::spawn_blocking(move || {
+    let conn = open_db(&db_path)?;
+    let affected = conn
+      .execute(
+        "UPDATE tasks
+         SET sync_status = 'pending', last_error = '', last_retry_at = ''
+         WHERE record_id = ?1 AND source = 'feishu'",
+        params![record_id],
+      )
+      .map_err(|err| format!("prepare task retry failed: {err}"))?;
+    if affected == 0 {
+      return Err("未找到可重试的飞书任务".to_string());
+    }
+    Ok::<(), String>(())
+  })
+  .await
+  .map_err(|err| format!("prepare task retry join failed: {err}"))?
 }
 
 async fn db_get_feishu_sync_meta(app: AppHandle) -> Result<SyncMeta, String> {
@@ -2627,6 +2671,13 @@ fn is_non_retryable_sync_error(error: &str) -> bool {
     || text.contains("fieldnamenotfound")
     || text.contains("code=1254043")
     || text.contains("code=1254045")
+    || text.contains("code=1254060")
+    || text.contains("code=1254061")
+    || text.contains("code=1254062")
+    || text.contains("code=1254063")
+    || text.contains("code=1254064")
+    || text.contains("code=1254065")
+    || text.contains("code=1254066")
     || text.contains("权限")
     || text.contains("字段")
     || text.contains("app token 未配置")
@@ -2896,6 +2947,56 @@ async fn delete_local_task(app: AppHandle, id: String) -> Result<bool, String> {
   })
   .await
   .map_err(|err| format!("db task join failed: {err}"))?
+}
+
+fn clear_recurring_series_rules(conn: &Connection, series_ids: &[String]) -> Result<usize, String> {
+  let mut affected = 0usize;
+  for series_id in series_ids {
+    let id = series_id.trim();
+    if id.is_empty() {
+      continue;
+    }
+    affected += conn
+      .execute(
+        "UPDATE tasks
+         SET recurrence_rule = ''
+         WHERE id = ?1
+            OR record_id = ?1
+            OR feishu_record_id = ?1
+            OR recurrence_parent_id = ?1",
+        params![id],
+      )
+      .map_err(|err| format!("stop recurring series failed: {err}"))?;
+  }
+  Ok(affected)
+}
+
+#[tauri::command]
+async fn stop_recurring_series(app: AppHandle, series_ids: Vec<String>) -> Result<usize, String> {
+  let normalized: Vec<String> = series_ids
+    .into_iter()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .collect::<std::collections::HashSet<_>>()
+    .into_iter()
+    .collect();
+  if normalized.is_empty() {
+    return Err("缺少重复任务系列标识".to_string());
+  }
+
+  let db_path = db_file_path(&app)?;
+  tokio::task::spawn_blocking(move || {
+    let mut conn = open_db(&db_path)?;
+    let tx = conn
+      .transaction()
+      .map_err(|err| format!("start recurring series transaction failed: {err}"))?;
+    let affected = clear_recurring_series_rules(&tx, &normalized)?;
+    tx.commit()
+      .map_err(|err| format!("commit recurring series transaction failed: {err}"))?;
+    Ok::<usize, String>(affected)
+  })
+  .await
+  .map_err(|err| format!("stop recurring series join failed: {err}"))?
 }
 
 fn habit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Habit> {
@@ -3786,9 +3887,9 @@ fn load_config(app: AppHandle) -> Result<ConfigPayload, String> {
     cfg.mode.clone()
   };
   let priority_field_name = configured_priority_field_name(&cfg.feishu).to_string();
-  let priority_urgent_value = to_feishu_priority_value(&cfg.feishu, "紧急");
-  let priority_important_value = to_feishu_priority_value(&cfg.feishu, "重要");
-  let priority_normal_value = to_feishu_priority_value(&cfg.feishu, "普通");
+  let priority_urgent_value = cfg.feishu.priority_urgent_value.clone();
+  let priority_important_value = cfg.feishu.priority_important_value.clone();
+  let priority_normal_value = cfg.feishu.priority_normal_value.clone();
 
   Ok(ConfigPayload {
     mode,
@@ -3823,22 +3924,24 @@ async fn save_feishu_field_mapping(
   let tag_field_name = tag_field_name.trim().to_string();
   let priority_field_name = priority_field_name.trim().to_string();
   let priority_values = [
-    priority_urgent_value.trim().to_string(),
-    priority_important_value.trim().to_string(),
-    priority_normal_value.trim().to_string(),
+    parse_priority_mapping_values(&priority_urgent_value),
+    parse_priority_mapping_values(&priority_important_value),
+    parse_priority_mapping_values(&priority_normal_value),
   ];
 
   if priority_field_name.is_empty() {
     return Err("请选择飞书优先级单选字段".to_string());
   }
-  if priority_values.iter().any(|value| value.is_empty()) {
-    return Err("请为紧急、重要、普通分别选择飞书枚举值".to_string());
+  if priority_values.iter().any(Vec::is_empty) {
+    return Err("请为紧急、重要、普通分别选择至少一个飞书枚举值".to_string());
   }
-  if priority_values[0] == priority_values[1]
-    || priority_values[0] == priority_values[2]
-    || priority_values[1] == priority_values[2]
+  let mut mapped_options = std::collections::HashSet::new();
+  if priority_values
+    .iter()
+    .flatten()
+    .any(|value| !mapped_options.insert(value.clone()))
   {
-    return Err("三个优先级需要绑定不同的飞书枚举值".to_string());
+    return Err("同一个飞书枚举值不能同时绑定多个 Topdo 优先级".to_string());
   }
 
   let fields = feishu_list_fields(&app).await?;
@@ -3859,7 +3962,7 @@ async fn save_feishu_field_mapping(
   if priority_field.field_type != 3 {
     return Err("优先级只能绑定飞书单选字段".to_string());
   }
-  for value in &priority_values {
+  for value in priority_values.iter().flatten() {
     if !priority_field.options.iter().any(|option| option == value) {
       return Err(format!(
         "枚举值“{}”不在字段“{}”中，请先在飞书中创建该选项",
@@ -3871,9 +3974,12 @@ async fn save_feishu_field_mapping(
   let mut cfg = load_app_config_from_file(&app)?;
   cfg.feishu.tag_field_name = tag_field_name;
   cfg.feishu.priority_field_name = priority_field_name;
-  cfg.feishu.priority_urgent_value = priority_values[0].clone();
-  cfg.feishu.priority_important_value = priority_values[1].clone();
-  cfg.feishu.priority_normal_value = priority_values[2].clone();
+  cfg.feishu.priority_urgent_value = serde_json::to_string(&priority_values[0])
+    .map_err(|err| format!("serialize urgent priority mapping failed: {err}"))?;
+  cfg.feishu.priority_important_value = serde_json::to_string(&priority_values[1])
+    .map_err(|err| format!("serialize important priority mapping failed: {err}"))?;
+  cfg.feishu.priority_normal_value = serde_json::to_string(&priority_values[2])
+    .map_err(|err| format!("serialize normal priority mapping failed: {err}"))?;
   save_app_config_to_file(&app, &cfg)
 }
 
@@ -4391,6 +4497,15 @@ async fn get_cached_tasks(app: AppHandle) -> Result<Vec<Task>, String> {
 }
 
 #[tauri::command]
+async fn retry_task_sync(app: AppHandle, record_id: String) -> Result<(), String> {
+  let record_id = record_id.trim().to_string();
+  if record_id.is_empty() {
+    return Err("record_id 不能为空".to_string());
+  }
+  db_mark_task_pending_for_retry(app, record_id).await
+}
+
+#[tauri::command]
 async fn cache_tasks(app: AppHandle, tasks: Vec<Task>) -> Result<(), String> {
   db_upsert_tasks(app, tasks).await
 }
@@ -4423,10 +4538,16 @@ async fn update_task(
       configured_priority_field_name(&config.feishu).to_string(),
       Value::String(to_feishu_priority_value(&config.feishu, &value)),
     ),
-    "标签" => (
-      configured_tag_field_name(&config.feishu).to_string(),
-      local_tags_to_feishu_value(&config.feishu, &value),
-    ),
+    "标签" => {
+      let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
+      let write_fields = feishu_prepare_write_fields(&app, true).await?;
+      let tag_field = feishu_tag_field(&write_fields, &tag_field_name)
+        .ok_or_else(|| format!("未能创建或找到飞书标签字段：{}", tag_field_name))?;
+      (
+        tag_field_name,
+        local_tags_to_feishu_value(&value, tag_field.field_type)?,
+      )
+    }
     _ => (field_name.trim().to_string(), Value::String(value.clone())),
   };
   let mut fields = serde_json::Map::new();
@@ -4474,8 +4595,8 @@ async fn sync_task_tags(
 
   let config = load_app_config_from_file(&app)?;
   let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
-  let field_names = match feishu_prepare_write_field_names(&app, true).await {
-    Ok(names) => names,
+  let write_fields = match feishu_prepare_write_fields(&app, true).await {
+    Ok(fields) => fields,
     Err(err) => {
       return Ok(UpdateTaskResult {
         success: false,
@@ -4483,18 +4604,24 @@ async fn sync_task_tags(
       })
     }
   };
-  if !has_feishu_field(&field_names, &tag_field_name) {
+  let Some(tag_field) = feishu_tag_field(&write_fields, &tag_field_name) else {
     return Ok(UpdateTaskResult {
       success: false,
       message: format!("未能创建或找到飞书标签字段：{}", tag_field_name),
     });
-  }
+  };
 
   let mut fields = serde_json::Map::new();
-  fields.insert(
-    tag_field_name,
-    local_tags_to_feishu_value(&config.feishu, &tags),
-  );
+  let tag_value = match local_tags_to_feishu_value(&tags, tag_field.field_type) {
+    Ok(value) => value,
+    Err(err) => {
+      return Ok(UpdateTaskResult {
+        success: false,
+        message: format!("标签同步失败：{err}"),
+      })
+    }
+  };
+  fields.insert(tag_field_name, tag_value);
   let fields = Value::Object(fields);
   match feishu_update_record_fields(&app, rid, fields).await {
     Ok(_) => Ok(UpdateTaskResult {
@@ -4642,8 +4769,8 @@ async fn sync_tasks(
     let tag_field_name = configured_tag_field_name(&config.feishu).to_string();
     let should_sync_tags = !normalize_tag_values(&task.tags).is_empty()
       || !config.feishu.tag_field_name.trim().is_empty();
-    let field_names = match feishu_prepare_write_field_names(&app, should_sync_tags).await {
-      Ok(names) => names,
+    let write_fields = match feishu_prepare_write_fields(&app, should_sync_tags).await {
+      Ok(fields) => fields,
       Err(err) if should_sync_tags => {
         let retryable = !is_non_retryable_sync_error(&err);
         let _ = db_mark_push_result(app.clone(), task.record_id.clone(), err, retryable).await;
@@ -4654,6 +4781,7 @@ async fn sync_tasks(
         Vec::new()
       }
     };
+    let field_names = feishu_field_names(&write_fields);
 
     let mut fields = json!({
       "任务名称": task.name,
@@ -4669,13 +4797,19 @@ async fn sync_tasks(
     if !task.notes.trim().is_empty() {
       insert_feishu_field_if_exists(&mut fields, &field_names, "备注/收获", Value::String(task.notes.clone()));
     }
-    if has_feishu_field(&field_names, &tag_field_name) {
-      insert_feishu_field_if_exists(
-        &mut fields,
-        &field_names,
-        &tag_field_name,
-        local_tags_to_feishu_value(&config.feishu, &task.tags),
-      );
+    if let Some(tag_field) = feishu_tag_field(&write_fields, &tag_field_name) {
+      match local_tags_to_feishu_value(&task.tags, tag_field.field_type) {
+        Ok(tag_value) => insert_feishu_field_if_exists(
+          &mut fields,
+          &field_names,
+          &tag_field_name,
+          tag_value,
+        ),
+        Err(err) => {
+          let _ = db_mark_push_result(app.clone(), task.record_id.clone(), err, false).await;
+          continue;
+        }
+      }
     }
 
     match feishu_update_record_fields(&app, &task.record_id, fields).await {
@@ -4782,8 +4916,10 @@ pub fn run() {
       create_local_task,
       update_local_task,
       delete_local_task,
+      stop_recurring_series,
       fetch_tasks,
       get_cached_tasks,
+      retry_task_sync,
       cache_tasks,
       update_task,
       sync_task_tags,
@@ -4805,6 +4941,54 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn test_task(record_id: &str, tags: &str) -> Task {
+    Task {
+      id: record_id.to_string(),
+      record_id: record_id.to_string(),
+      name: "测试任务".to_string(),
+      status: "待处理".to_string(),
+      priority: "普通".to_string(),
+      task_type: "日常事务".to_string(),
+      time_spent: String::new(),
+      created_at: "2026-07-17T10:00:00".to_string(),
+      updated_at: "2026-07-17T10:00:00".to_string(),
+      completed_at: String::new(),
+      notes: String::new(),
+      sort_order: 0,
+      sub_tasks: "[]".to_string(),
+      tags: tags.to_string(),
+      due_date: String::new(),
+      recurrence_rule: String::new(),
+      recurrence_parent_id: String::new(),
+      recurrence_index: None,
+      reminder_before: None,
+      reminder_notified: false,
+      source: "feishu".to_string(),
+      feishu_record_id: record_id.to_string(),
+      sync_status: "synced".to_string(),
+      last_synced_at: "2026-07-17T10:00:00".to_string(),
+      retry_count: 0,
+      last_error: String::new(),
+      last_retry_at: String::new(),
+    }
+  }
+
+  fn create_test_tasks_table(conn: &Connection) {
+    conn
+      .execute_batch(CREATE_TASKS_TABLE_SQL)
+      .expect("create test tasks table");
+    ensure_column(conn, "tasks", "recurrence_rule", "TEXT DEFAULT ''")
+      .expect("add recurrence_rule");
+    ensure_column(conn, "tasks", "recurrence_parent_id", "TEXT DEFAULT ''")
+      .expect("add recurrence_parent_id");
+    ensure_column(conn, "tasks", "recurrence_index", "INTEGER DEFAULT NULL")
+      .expect("add recurrence_index");
+    ensure_column(conn, "tasks", "reminder_before", "INTEGER DEFAULT NULL")
+      .expect("add reminder_before");
+    ensure_column(conn, "tasks", "reminder_notified", "INTEGER DEFAULT 0")
+      .expect("add reminder_notified");
+  }
 
   fn mapped_feishu_config() -> FeishuConfig {
     FeishuConfig {
@@ -4830,11 +5014,30 @@ mod tests {
   }
 
   #[test]
-  fn bound_tags_use_multi_select_array() {
-    let config = mapped_feishu_config();
+  fn multiple_feishu_options_can_map_to_one_local_priority() {
+    let mut config = mapped_feishu_config();
+    config.priority_normal_value = r#"["P2","P3"]"#.to_string();
+
+    assert_eq!(to_feishu_priority_value(&config, "普通"), "P2");
+    assert_eq!(from_feishu_priority_value(&config, "P2"), "普通");
+    assert_eq!(from_feishu_priority_value(&config, "P3"), "普通");
+    assert_eq!(to_feishu_priority_value(&config, "P3"), "P3");
+  }
+
+  #[test]
+  fn legacy_plain_priority_mapping_remains_supported() {
+    assert_eq!(parse_priority_mapping_values("P1"), vec!["P1".to_string()]);
     assert_eq!(
-      local_tags_to_feishu_value(&config, r#"["需求","oncall"]"#),
-      json!(["需求", "oncall"])
+      parse_priority_mapping_values(r#"["P2","P3","P2"]"#),
+      vec!["P2".to_string(), "P3".to_string()]
+    );
+  }
+
+  #[test]
+  fn bound_tags_use_multi_select_array() {
+    assert_eq!(
+      local_tags_to_feishu_value(r#"["需求","oncall"]"#, 4),
+      Ok(json!(["需求", "oncall"]))
     );
     assert_eq!(
       feishu_tags_value_to_local_json(Some(&json!(["需求", "oncall"]))),
@@ -4844,11 +5047,56 @@ mod tests {
 
   #[test]
   fn legacy_tags_remain_text() {
-    let config = FeishuConfig::default();
     assert_eq!(
-      local_tags_to_feishu_value(&config, r#"["需求","oncall"]"#),
-      Value::String("需求, oncall".to_string())
+      local_tags_to_feishu_value(r#"["需求","oncall"]"#, 1),
+      Ok(Value::String("需求, oncall".to_string()))
     );
+  }
+
+  #[test]
+  fn clearing_tags_uses_null_for_any_supported_field_type() {
+    assert_eq!(local_tags_to_feishu_value("[]", 1), Ok(Value::Null));
+    assert_eq!(local_tags_to_feishu_value("[]", 4), Ok(Value::Null));
+  }
+
+  #[test]
+  fn remote_empty_tags_clear_local_cache_only_when_field_is_present() {
+    let conn = Connection::open_in_memory().expect("open test db");
+    create_test_tasks_table(&conn);
+
+    upsert_task(&conn, &test_task("record-1", r#"["旧标签"]"#))
+      .expect("seed local tags");
+    upsert_task(&conn, &test_task("record-1", "[]"))
+      .expect("clear tags from remote field");
+    let cleared: String = conn
+      .query_row(
+        "SELECT tags FROM tasks WHERE record_id = 'record-1'",
+        [],
+        |row| row.get(0),
+      )
+      .expect("read cleared tags");
+    assert_eq!(cleared, "[]");
+
+    upsert_task(&conn, &test_task("record-1", r#"["保留标签"]"#))
+      .expect("restore local tags");
+    upsert_task(&conn, &test_task("record-1", ""))
+      .expect("upsert remote record without tag field");
+    let preserved: String = conn
+      .query_row(
+        "SELECT tags FROM tasks WHERE record_id = 'record-1'",
+        [],
+        |row| row.get(0),
+      )
+      .expect("read preserved tags");
+    assert_eq!(preserved, r#"["保留标签"]"#);
+  }
+
+  #[test]
+  fn feishu_field_conversion_errors_require_user_action() {
+    assert!(is_non_retryable_sync_error(
+      "飞书返回错误 code=1254063 MultiSelectFieldConvFail"
+    ));
+    assert!(!is_non_retryable_sync_error("request failed: connection reset"));
   }
 
   #[test]
@@ -4859,5 +5107,45 @@ mod tests {
       "property": { "options": [{ "name": "P0" }, { "name": "P1" }] }
     });
     assert_eq!(parse_feishu_field_options(&field), vec!["P0", "P1"]);
+  }
+
+  #[test]
+  fn stopping_recurring_series_clears_template_and_instances_only() {
+    let conn = Connection::open_in_memory().expect("open test db");
+    conn.execute_batch(
+      "CREATE TABLE tasks (
+         id TEXT,
+         record_id TEXT,
+         feishu_record_id TEXT,
+         recurrence_parent_id TEXT,
+         recurrence_rule TEXT
+       );
+       INSERT INTO tasks VALUES ('root', 'root', '', '', '{\"type\":\"weekly\"}');
+       INSERT INTO tasks VALUES ('child-1', 'child-1', '', 'root', '{\"type\":\"weekly\"}');
+       INSERT INTO tasks VALUES ('child-2', 'child-2', '', 'root', '{\"type\":\"weekly\"}');
+       INSERT INTO tasks VALUES ('other', 'other', '', '', '{\"type\":\"daily\"}');",
+    )
+    .expect("seed recurring tasks");
+
+    let affected = clear_recurring_series_rules(&conn, &["root".to_string()])
+      .expect("stop recurring series");
+    assert_eq!(affected, 3);
+
+    let remaining: Vec<(String, String)> = conn
+      .prepare("SELECT id, recurrence_rule FROM tasks ORDER BY id")
+      .expect("prepare query")
+      .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+      .expect("query tasks")
+      .collect::<Result<Vec<_>, _>>()
+      .expect("collect tasks");
+    assert_eq!(
+      remaining,
+      vec![
+        ("child-1".to_string(), String::new()),
+        ("child-2".to_string(), String::new()),
+        ("other".to_string(), "{\"type\":\"daily\"}".to_string()),
+        ("root".to_string(), String::new()),
+      ]
+    );
   }
 }

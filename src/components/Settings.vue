@@ -184,15 +184,14 @@
                     <p>绑定一个已有的多选字段；已有选项可复用，新标签会同步为新选项。</p>
                   </div>
                 </div>
-                <label class="form-group mapping-control">
+                <div class="form-group mapping-control">
                   <span class="form-label">飞书多选字段</span>
-                  <select v-model="fieldMapping.tagFieldName" class="form-input select-input">
-                    <option value="">使用 Topdo 默认“标签”文本字段</option>
-                    <option v-for="field in multiSelectFields" :key="field.field_name" :value="field.field_name">
-                      {{ field.field_name }}（{{ field.options.length }} 个选项）
-                    </option>
-                  </select>
-                </label>
+                  <TopdoSelect
+                    v-model="fieldMapping.tagFieldName"
+                    :options="tagFieldSelectOptions"
+                    aria-label="选择飞书标签字段"
+                  />
+                </div>
                 <p v-if="fieldMapping.tagFieldName" class="mapping-preview">
                   已有标签：{{ selectedTagOptions.length ? selectedTagOptions.join(' · ') : '该字段还没有选项' }}
                 </p>
@@ -206,25 +205,29 @@
                     <p>将 Topdo 的三级优先级绑定到你已有的单选枚举，避免创建新值。</p>
                   </div>
                 </div>
-                <label class="form-group mapping-control">
+                <div class="form-group mapping-control">
                   <span class="form-label">飞书单选字段</span>
-                  <select v-model="fieldMapping.priorityFieldName" class="form-input select-input" @change="onPriorityFieldChanged">
-                    <option value="" disabled>选择单选字段</option>
-                    <option v-for="field in singleSelectFields" :key="field.field_name" :value="field.field_name">
-                      {{ field.field_name }}
-                    </option>
-                  </select>
-                </label>
+                  <TopdoSelect
+                    :model-value="fieldMapping.priorityFieldName"
+                    :options="priorityFieldSelectOptions"
+                    placeholder="选择单选字段"
+                    aria-label="选择飞书优先级字段"
+                    @update:model-value="onPriorityFieldSelected"
+                  />
+                </div>
                 <div class="priority-mapping-grid">
-                  <label v-for="item in priorityMappingRows" :key="item.key" class="priority-mapping-row">
+                  <div v-for="item in priorityMappingRows" :key="item.key" class="priority-mapping-row">
                     <span class="local-priority" :class="item.key"><i />{{ item.label }}</span>
                     <Icon name="chevron-right" :size="14" />
-                    <select v-model="fieldMapping[item.model]" class="form-input select-input">
-                      <option value="" disabled>选择飞书枚举</option>
-                      <option v-for="option in selectedPriorityOptions" :key="option" :value="option">{{ option }}</option>
-                    </select>
-                  </label>
+                    <TopdoMultiSelect
+                      v-model="fieldMapping[item.model]"
+                      :options="priorityValueSelectOptions"
+                      placeholder="选择飞书枚举"
+                      :aria-label="`${item.label}对应的飞书枚举`"
+                    />
+                  </div>
                 </div>
+                <p class="mapping-hint">可勾选多个枚举；读取时都会归入对应优先级，Topdo 写回时使用第一个选中值。</p>
               </div>
 
               <div class="mapping-actions">
@@ -355,7 +358,7 @@
       <button type="button" class="setting-row clickable full-row-button" :disabled="busy" @click="onCheckUpdates">
         <span class="setting-icon gray"><Icon name="info" :size="18" /></span>
         <div class="setting-text">
-          <p class="setting-name">Topdo v2.1.2</p>
+          <p class="setting-name">Topdo v2.2.0</p>
         </div>
         <Icon name="chevron-right" :size="17" />
       </button>
@@ -421,6 +424,8 @@ import { disable as disableAutostart, enable as enableAutostart, isEnabled as is
 import Icon from './Icon.vue';
 import KbdShortcut from './KbdShortcut.vue';
 import SegmentedControl from './SegmentedControl.vue';
+import TopdoMultiSelect from './TopdoMultiSelect.vue';
+import TopdoSelect from './TopdoSelect.vue';
 import { useAppStore } from '../stores/appStore';
 import { useHabitStore } from '../stores/habitStore';
 import { usePetStore } from '../stores/petStore';
@@ -507,7 +512,7 @@ const GITHUB_SUPPORT_URL = 'https://github.com/SkyNone/Topdo/blob/main/docs/SUPP
 const GITHUB_PRIVACY_URL = 'https://github.com/SkyNone/Topdo/blob/main/docs/PRIVACY.md';
 const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/SkyNone/Topdo/releases/latest';
 const GITHUB_LATEST_RELEASE_URL = 'https://github.com/SkyNone/Topdo/releases/latest';
-const APP_VERSION = '2.1.2';
+const APP_VERSION = '2.2.0';
 const FEISHU_TEMPLATE_URL =
   'https://s7wd8lze1s.feishu.cn/base/QR7rbtLf0adg0gsFun7cKnYOnGd?table=tblSeF0WH71ITCe7&view=vewMSNDmR0';
 const FEISHU_TUTORIAL_URL = 'https://github.com/SkyNone/Topdo/blob/main/docs/FEISHU_SETUP.md';
@@ -567,9 +572,9 @@ const form = reactive<FormState>({
 const fieldMapping = reactive({
   tagFieldName: '',
   priorityFieldName: '优先级',
-  priorityUrgentValue: '今日必做',
-  priorityImportantValue: '本周完成',
-  priorityNormalValue: '自由安排'
+  priorityUrgentValue: ['今日必做'],
+  priorityImportantValue: ['本周完成'],
+  priorityNormalValue: ['自由安排']
 });
 
 const priorityMappingRows: Array<{ key: 'urgent' | 'important' | 'normal'; label: string; model: PriorityMappingModel }> = [
@@ -600,6 +605,21 @@ const selectedTagOptions = computed(
 const selectedPriorityOptions = computed(
   () => singleSelectFields.value.find((field) => field.field_name === fieldMapping.priorityFieldName)?.options || []
 );
+const tagFieldSelectOptions = computed(() => [
+  { value: '', label: 'Topdo 默认“标签”文本字段' },
+  ...multiSelectFields.value.map((field) => ({
+    value: field.field_name,
+    label: `${field.field_name}（${field.options.length} 个选项）`
+  }))
+]);
+const priorityFieldSelectOptions = computed(() => singleSelectFields.value.map((field) => ({
+  value: field.field_name,
+  label: field.field_name
+})));
+const priorityValueSelectOptions = computed(() => selectedPriorityOptions.value.map((option) => ({
+  value: option,
+  label: option
+})));
 const habitModuleEnabledModel = computed({
   get: () => appStore.habitModuleEnabled,
   set: (enabled: boolean) => appStore.setHabitModuleEnabled(enabled)
@@ -870,19 +890,37 @@ function openCredentialStep() {
   if (nextOpen) bitableExpanded.value = false;
 }
 
-function pickExistingOption(options: string[], current: string, aliases: string[]): string {
-  if (options.includes(current)) return current;
-  return aliases.find((alias) => options.includes(alias)) || '';
+function parsePriorityMappingValue(raw: string, fallback: string): string[] {
+  const value = String(raw || '').trim();
+  if (!value) return [fallback];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      const values = parsed.map((item) => String(item || '').trim()).filter(Boolean);
+      return values.length ? Array.from(new Set(values)) : [fallback];
+    }
+  } catch {
+    // Older settings store one plain enum value instead of a JSON array.
+  }
+  return [value];
+}
+
+function pickExistingOptions(options: string[], current: string[], aliases: string[]): string[] {
+  const existing = current.filter((value) => options.includes(value));
+  if (existing.length) return existing;
+  const fallback = aliases.find((alias) => options.includes(alias));
+  return fallback ? [fallback] : [];
 }
 
 function applyPriorityOptionsForSelectedField() {
   const options = selectedPriorityOptions.value;
-  fieldMapping.priorityUrgentValue = pickExistingOption(options, fieldMapping.priorityUrgentValue, ['紧急', '今日必做']);
-  fieldMapping.priorityImportantValue = pickExistingOption(options, fieldMapping.priorityImportantValue, ['重要', '本周完成']);
-  fieldMapping.priorityNormalValue = pickExistingOption(options, fieldMapping.priorityNormalValue, ['普通', '自由安排']);
+  fieldMapping.priorityUrgentValue = pickExistingOptions(options, fieldMapping.priorityUrgentValue, ['紧急', '今日必做']);
+  fieldMapping.priorityImportantValue = pickExistingOptions(options, fieldMapping.priorityImportantValue, ['重要', '本周完成']);
+  fieldMapping.priorityNormalValue = pickExistingOptions(options, fieldMapping.priorityNormalValue, ['普通', '自由安排']);
 }
 
-function onPriorityFieldChanged() {
+function onPriorityFieldSelected(value: string) {
+  fieldMapping.priorityFieldName = value;
   applyPriorityOptionsForSelectedField();
 }
 
@@ -929,8 +967,17 @@ async function saveFieldMapping() {
     setStatus('error', '请选择飞书优先级单选字段');
     return;
   }
-  if (!fieldMapping.priorityUrgentValue || !fieldMapping.priorityImportantValue || !fieldMapping.priorityNormalValue) {
-    setStatus('error', '请完成紧急、重要、普通的枚举映射');
+  if (!fieldMapping.priorityUrgentValue.length || !fieldMapping.priorityImportantValue.length || !fieldMapping.priorityNormalValue.length) {
+    setStatus('error', '请为紧急、重要、普通分别选择至少一个飞书枚举值');
+    return;
+  }
+  const allPriorityValues = [
+    ...fieldMapping.priorityUrgentValue,
+    ...fieldMapping.priorityImportantValue,
+    ...fieldMapping.priorityNormalValue
+  ];
+  if (new Set(allPriorityValues).size !== allPriorityValues.length) {
+    setStatus('error', '同一个飞书枚举值不能同时绑定多个 Topdo 优先级');
     return;
   }
 
@@ -941,12 +988,12 @@ async function saveFieldMapping() {
       tag_field_name: fieldMapping.tagFieldName,
       priorityFieldName: fieldMapping.priorityFieldName,
       priority_field_name: fieldMapping.priorityFieldName,
-      priorityUrgentValue: fieldMapping.priorityUrgentValue,
-      priority_urgent_value: fieldMapping.priorityUrgentValue,
-      priorityImportantValue: fieldMapping.priorityImportantValue,
-      priority_important_value: fieldMapping.priorityImportantValue,
-      priorityNormalValue: fieldMapping.priorityNormalValue,
-      priority_normal_value: fieldMapping.priorityNormalValue
+      priorityUrgentValue: JSON.stringify(fieldMapping.priorityUrgentValue),
+      priority_urgent_value: JSON.stringify(fieldMapping.priorityUrgentValue),
+      priorityImportantValue: JSON.stringify(fieldMapping.priorityImportantValue),
+      priority_important_value: JSON.stringify(fieldMapping.priorityImportantValue),
+      priorityNormalValue: JSON.stringify(fieldMapping.priorityNormalValue),
+      priority_normal_value: JSON.stringify(fieldMapping.priorityNormalValue)
     });
     if (fieldMapping.tagFieldName) taskStore.rememberTags(selectedTagOptions.value);
     fieldMappingSaved.value = true;
@@ -974,15 +1021,18 @@ async function loadConfig() {
     hasSavedSecret.value = Boolean(config.has_secret);
     fieldMapping.tagFieldName = config.tag_field_name || '';
     fieldMapping.priorityFieldName = config.priority_field_name || '优先级';
-    fieldMapping.priorityUrgentValue = config.priority_urgent_value || '今日必做';
-    fieldMapping.priorityImportantValue = config.priority_important_value || '本周完成';
-    fieldMapping.priorityNormalValue = config.priority_normal_value || '自由安排';
+    fieldMapping.priorityUrgentValue = parsePriorityMappingValue(config.priority_urgent_value, '今日必做');
+    fieldMapping.priorityImportantValue = parsePriorityMappingValue(config.priority_important_value, '本周完成');
+    fieldMapping.priorityNormalValue = parsePriorityMappingValue(config.priority_normal_value, '自由安排');
     fieldMappingSaved.value = Boolean(
       config.tag_field_name
       || config.priority_field_name !== '优先级'
-      || config.priority_urgent_value !== '今日必做'
-      || config.priority_important_value !== '本周完成'
-      || config.priority_normal_value !== '自由安排'
+      || fieldMapping.priorityUrgentValue.length !== 1
+      || fieldMapping.priorityUrgentValue[0] !== '今日必做'
+      || fieldMapping.priorityImportantValue.length !== 1
+      || fieldMapping.priorityImportantValue[0] !== '本周完成'
+      || fieldMapping.priorityNormalValue.length !== 1
+      || fieldMapping.priorityNormalValue[0] !== '自由安排'
     );
     stepState.linkParsed = Boolean(config.app_token && config.table_id);
     stepState.credentialReady = Boolean(config.app_id && config.has_secret);
@@ -1683,11 +1733,6 @@ watch(
   margin: 0;
 }
 
-.select-input {
-  appearance: auto;
-  padding-right: 8px;
-}
-
 .mapping-preview {
   margin-top: 8px;
   color: var(--text-secondary);
@@ -1708,8 +1753,15 @@ watch(
   color: var(--text-tertiary);
 }
 
-.priority-mapping-row .form-input {
+.priority-mapping-row .topdo-multi-select {
   min-width: 0;
+}
+
+.mapping-hint {
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 15px;
 }
 
 .local-priority {

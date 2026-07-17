@@ -5,6 +5,7 @@ import { dueTimestamp } from './dueDate';
 
 let taskReminderTimer: ReturnType<typeof setInterval> | null = null;
 let habitReminderTimer: ReturnType<typeof setInterval> | null = null;
+const taskReminderInFlightKeys = new Set<string>();
 const habitNotifiedKeys = new Set<string>();
 
 export interface InAppReminder {
@@ -78,29 +79,38 @@ export function startReminderService(
       const reminder = due - Number(task.reminder_before) * 60_000;
       const shouldNotify = now >= reminder;
       if (!shouldNotify) continue;
+      const notificationKey = `${task.record_id}:${task.due_date}:${task.reminder_before}`;
+      if (taskReminderInFlightKeys.has(notificationKey)) continue;
+      taskReminderInFlightKeys.add(notificationKey);
       const title = now > due ? '任务已逾期' : reminderTitle(Number(task.reminder_before));
       const systemTitle = `Topdo · ${now > due ? '已逾期' : reminderTitle(Number(task.reminder_before))}`;
-      if (canSendSystemNotification) {
-        try {
-          await sendNotification({
-            title: systemTitle,
-            body: task.name
-          });
-        } catch (error) {
-          console.warn('发送任务系统通知失败:', error);
+      try {
+        if (canSendSystemNotification) {
+          try {
+            await sendNotification({
+              title: systemTitle,
+              body: task.name
+            });
+          } catch (error) {
+            console.warn('发送任务系统通知失败:', error);
+          }
         }
+        onInAppReminder?.({
+          id: `task:${task.record_id}:${now}`,
+          kind: 'task',
+          tone: now > due ? 'overdue' : 'due',
+          title,
+          body: task.name,
+          actionLabel: '查看',
+          targetId: task.record_id,
+          createdAt: now
+        });
+        await markNotified(task.record_id);
+      } catch (error) {
+        console.warn('发送或记录任务提醒失败:', error);
+      } finally {
+        taskReminderInFlightKeys.delete(notificationKey);
       }
-      onInAppReminder?.({
-        id: `task:${task.record_id}:${now}`,
-        kind: 'task',
-        tone: now > due ? 'overdue' : 'due',
-        title,
-        body: task.name,
-        actionLabel: '查看',
-        targetId: task.record_id,
-        createdAt: now
-      });
-      await markNotified(task.record_id);
     }
   };
 

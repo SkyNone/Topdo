@@ -787,7 +787,7 @@ function getCompletionAnchor(): { x: number; y: number } | null {
 
 async function onRetrySync() {
   try {
-    await store.triggerSync();
+    await store.retryTaskSync(props.task.record_id);
   } catch (error) {
     emit('error', `重试同步失败：${String(error)}`);
   }

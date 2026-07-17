@@ -15,8 +15,8 @@
     <button type="button" class="receipt-entry" @click="emit('open-receipt')">
       <span class="receipt-entry__icon"><Icon name="file-text" :size="18" /></span>
       <span class="receipt-entry__copy">
-        <strong>今日小票</strong>
-        <small>把今天完成的任务和习惯保存下来</small>
+        <strong>日有所成</strong>
+        <small>把今天完成的事，认真留住</small>
       </span>
       <Icon name="chevron-right" :size="15" />
     </button>

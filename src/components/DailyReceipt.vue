@@ -21,13 +21,13 @@
           </button>
         </div>
         <section class="receipt-dialog task-scrollbar" role="dialog" aria-modal="true" aria-labelledby="daily-receipt-title">
-          <button type="button" class="receipt-close" aria-label="关闭今日小票" @click="close">
+          <button type="button" class="receipt-close" aria-label="关闭日有所成" @click="close">
             <Icon name="x" :size="16" />
           </button>
 
           <div class="receipt-paper">
             <p class="receipt-brand">TOPDO</p>
-            <h2 id="daily-receipt-title">今日小票</h2>
+            <h2 id="daily-receipt-title">日有所成</h2>
             <p class="receipt-date">{{ receipt.dateLabel }}</p>
 
             <div class="receipt-total">
@@ -45,7 +45,7 @@
             </div>
             <div v-else class="receipt-empty">
               <strong>今天还没有完成记录</strong>
-              <span>完成一项任务或习惯后，就能生成今日小票。</span>
+              <span>完成一项任务或习惯，为今天留下第一笔记录。</span>
             </div>
 
             <div class="receipt-metrics">
@@ -54,9 +54,6 @@
               <div><span>连续完成</span><strong>{{ receipt.streak }}<small>天</small></strong></div>
             </div>
 
-            <div v-if="receipt.tags.length" class="receipt-tags">
-              <span v-for="tag in receipt.tags" :key="tag">{{ tag }}</span>
-            </div>
             <p class="receipt-quote">{{ receipt.encouragement }}</p>
           </div>
 
@@ -130,7 +127,7 @@ async function saveImage() {
   saving.value = true;
   try {
     const path = await exportDailyReceiptImage(receipt.value);
-    showFeedback('小票图片已保存', { path, duration: 8000 });
+    showFeedback('“日有所成”图片已保存', { path, duration: 8000 });
   } catch (error) {
     showFeedback(`保存失败：${String(error)}`, { type: 'error' });
   } finally {
@@ -143,7 +140,7 @@ async function copyText() {
   const text = buildDailyReceiptText(receipt.value);
   try {
     await copyToClipboard(text);
-    showFeedback('今日小票文字已复制');
+    showFeedback('“日有所成”文字已复制');
   } catch (error) {
     showFeedback(`复制失败：${String(error)}`, { type: 'error' });
   }
@@ -411,22 +408,6 @@ onUnmounted(() => {
   font-size: 20px;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-}
-
-.receipt-tags {
-  padding-top: 12px;
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.receipt-tags span {
-  padding: 4px 9px;
-  border-radius: 999px;
-  color: var(--primary);
-  background: #edf5ff;
-  font-size: 10px;
 }
 
 .receipt-quote {

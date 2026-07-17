@@ -1,8 +1,8 @@
-# Daily Receipt Design QA
+# 日有所成 Design QA
 
 ## Scope
 
-- Feature: Topdo 今日小票
+- Feature: Topdo 日有所成
 - Reference: `/Users/bytedance/.codex/generated_images/019d8ef2-797d-7a42-a542-f1e302419e8e/exec-d0ccff5c-0c6c-4a65-822b-fa92922054cc.png`
 - Implementation: `src/components/DailyReceipt.vue`
 - Data and image export: `src/services/dailyReceiptService.ts`
@@ -18,7 +18,7 @@
 
 ## Visual Comparison
 
-The implementation preserves the selected reference's hierarchy: receipt title, date, dominant completion count, completion rows with timestamps, three summary metrics, tags, closing message, and two clear export actions. The paper now uses continuous scalloped edges, a warm paper tone, subtle grain, dashed separators, and a distinct drop shadow instead of a generic rounded card. It intentionally removes the generated mock's surrounding app chrome because the receipt opens inside the existing Topdo window.
+The implementation preserves the selected reference's hierarchy: title, date, dominant completion count, completion rows with timestamps, three summary metrics, closing message, and two clear export actions. The paper uses continuous scalloped edges, a warm paper tone, subtle grain, dashed separators, and a distinct drop shadow instead of a generic rounded card. It intentionally removes the generated mock's surrounding app chrome because the experience opens inside the existing Topdo window.
 
 ## Findings
 

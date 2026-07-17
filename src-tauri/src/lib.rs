@@ -3706,14 +3706,14 @@ fn export_data_file(app: AppHandle, format: String, content: String) -> Result<S
 fn export_daily_receipt_image(app: AppHandle, bytes: Vec<u8>) -> Result<String, String> {
   const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
   if bytes.len() < PNG_SIGNATURE.len() || &bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
-    return Err("生成的小票不是有效 PNG 图片".to_string());
+    return Err("生成的“日有所成”内容不是有效 PNG 图片".to_string());
   }
   if bytes.len() > 10 * 1024 * 1024 {
-    return Err("小票图片过大，无法保存".to_string());
+    return Err("“日有所成”图片过大，无法保存".to_string());
   }
   let dir = export_dir(&app)?;
   fs::create_dir_all(&dir).map_err(|err| format!("create export dir failed: {err}"))?;
-  let path = dir.join(format!("Topdo-今日小票-{}.png", chrono_like_date()));
+  let path = dir.join(format!("Topdo-日有所成-{}.png", chrono_like_date()));
   fs::write(&path, bytes).map_err(|err| format!("write receipt image failed: {err}"))?;
   Ok(path.to_string_lossy().to_string())
 }

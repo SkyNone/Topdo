@@ -147,6 +147,99 @@
           </div>
         </Transition>
       </section>
+
+      <section class="settings-group field-sync-group">
+        <button type="button" class="setting-row clickable full-row-button" @click="openFieldMapping">
+          <span class="setting-icon blue"><Icon name="tag" :size="18" /></span>
+          <div class="setting-text">
+            <p class="setting-name">字段同步</p>
+            <p class="field-sync-summary">绑定已有标签字段，并适配你的优先级枚举</p>
+          </div>
+          <span v-if="fieldMappingSaved" class="mapping-state">已配置</span>
+          <Icon name="chevron-right" :size="17" class="setting-arrow" :class="{ open: fieldMappingExpanded }" />
+        </button>
+        <Transition name="expand">
+          <div v-if="fieldMappingExpanded" class="field-mapping-panel">
+            <div class="mapping-intro">
+              <div>
+                <strong>复用飞书已有字段</strong>
+                <p>Topdo 只在同步边界转换名称，不改变应用内的优先级。</p>
+              </div>
+              <button type="button" class="btn ghost compact" :disabled="fieldLoading" @click="loadFeishuFields(true)">
+                {{ fieldLoading ? '读取中...' : '刷新字段' }}
+              </button>
+            </div>
+
+            <div v-if="!feishuFields.length" class="mapping-empty">
+              <Icon name="info" :size="16" />
+              <span>先完成连接测试，再读取这张多维表格的字段。</span>
+            </div>
+
+            <template v-else>
+              <div class="mapping-section">
+                <div class="mapping-heading">
+                  <span class="mapping-number">1</span>
+                  <div>
+                    <strong>标签同步</strong>
+                    <p>绑定一个已有的多选字段；已有选项可复用，新标签会同步为新选项。</p>
+                  </div>
+                </div>
+                <div class="form-group mapping-control">
+                  <span class="form-label">飞书多选字段</span>
+                  <TopdoSelect
+                    v-model="fieldMapping.tagFieldName"
+                    :options="tagFieldSelectOptions"
+                    aria-label="选择飞书标签字段"
+                  />
+                </div>
+                <p v-if="fieldMapping.tagFieldName" class="mapping-preview">
+                  已有标签：{{ selectedTagOptions.length ? selectedTagOptions.join(' · ') : '该字段还没有选项' }}
+                </p>
+              </div>
+
+              <div class="mapping-section">
+                <div class="mapping-heading">
+                  <span class="mapping-number">2</span>
+                  <div>
+                    <strong>优先级映射</strong>
+                    <p>将 Topdo 的三级优先级绑定到你已有的单选枚举，避免创建新值。</p>
+                  </div>
+                </div>
+                <div class="form-group mapping-control">
+                  <span class="form-label">飞书单选字段</span>
+                  <TopdoSelect
+                    :model-value="fieldMapping.priorityFieldName"
+                    :options="priorityFieldSelectOptions"
+                    placeholder="选择单选字段"
+                    aria-label="选择飞书优先级字段"
+                    @update:model-value="onPriorityFieldSelected"
+                  />
+                </div>
+                <div class="priority-mapping-grid">
+                  <div v-for="item in priorityMappingRows" :key="item.key" class="priority-mapping-row">
+                    <span class="local-priority" :class="item.key"><i />{{ item.label }}</span>
+                    <Icon name="chevron-right" :size="14" />
+                    <TopdoMultiSelect
+                      v-model="fieldMapping[item.model]"
+                      :options="priorityValueSelectOptions"
+                      placeholder="选择飞书枚举"
+                      :aria-label="`${item.label}对应的飞书枚举`"
+                    />
+                  </div>
+                </div>
+                <p class="mapping-hint">可勾选多个枚举；读取时都会归入对应优先级，Topdo 写回时使用第一个选中值。</p>
+              </div>
+
+              <div class="mapping-actions">
+                <button type="button" class="btn ghost" @click="fieldMappingExpanded = false">取消</button>
+                <button type="button" class="btn primary" :disabled="busy || fieldMappingSaving" @click="saveFieldMapping">
+                  {{ fieldMappingSaving ? '保存中...' : '保存字段映射' }}
+                </button>
+              </div>
+            </template>
+          </div>
+        </Transition>
+      </section>
     </template>
 
     <section class="settings-group">
@@ -265,7 +358,7 @@
       <button type="button" class="setting-row clickable full-row-button" :disabled="busy" @click="onCheckUpdates">
         <span class="setting-icon gray"><Icon name="info" :size="18" /></span>
         <div class="setting-text">
-          <p class="setting-name">Topdo v2.1.2</p>
+          <p class="setting-name">Topdo v2.2.0</p>
         </div>
         <Icon name="chevron-right" :size="17" />
       </button>
@@ -331,6 +424,8 @@ import { disable as disableAutostart, enable as enableAutostart, isEnabled as is
 import Icon from './Icon.vue';
 import KbdShortcut from './KbdShortcut.vue';
 import SegmentedControl from './SegmentedControl.vue';
+import TopdoMultiSelect from './TopdoMultiSelect.vue';
+import TopdoSelect from './TopdoSelect.vue';
 import { useAppStore } from '../stores/appStore';
 import { useHabitStore } from '../stores/habitStore';
 import { usePetStore } from '../stores/petStore';
@@ -359,7 +454,20 @@ interface LoadConfigPayload {
   folder_token: string;
   collaborator_email: string;
   has_secret: boolean;
+  tag_field_name: string;
+  priority_field_name: string;
+  priority_urgent_value: string;
+  priority_important_value: string;
+  priority_normal_value: string;
 }
+
+interface FeishuFieldPayload {
+  field_name: string;
+  field_type: number;
+  options: string[];
+}
+
+type PriorityMappingModel = 'priorityUrgentValue' | 'priorityImportantValue' | 'priorityNormalValue';
 
 interface ConnectionResult {
   success: boolean;
@@ -404,7 +512,7 @@ const GITHUB_SUPPORT_URL = 'https://github.com/SkyNone/Topdo/blob/main/docs/SUPP
 const GITHUB_PRIVACY_URL = 'https://github.com/SkyNone/Topdo/blob/main/docs/PRIVACY.md';
 const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/SkyNone/Topdo/releases/latest';
 const GITHUB_LATEST_RELEASE_URL = 'https://github.com/SkyNone/Topdo/releases/latest';
-const APP_VERSION = '2.1.2';
+const APP_VERSION = '2.2.0';
 const FEISHU_TEMPLATE_URL =
   'https://s7wd8lze1s.feishu.cn/base/QR7rbtLf0adg0gsFun7cKnYOnGd?table=tblSeF0WH71ITCe7&view=vewMSNDmR0';
 const FEISHU_TUTORIAL_URL = 'https://github.com/SkyNone/Topdo/blob/main/docs/FEISHU_SETUP.md';
@@ -441,6 +549,11 @@ const petWindowMode = ref('panel');
 const hasSavedSecret = ref(false);
 const bitableExpanded = ref(false);
 const credentialExpanded = ref(false);
+const fieldMappingExpanded = ref(false);
+const fieldLoading = ref(false);
+const fieldMappingSaving = ref(false);
+const fieldMappingSaved = ref(false);
+const feishuFields = ref<FeishuFieldPayload[]>([]);
 const systemMenuBarEnabled = ref(true);
 const systemCloseToMenuBar = ref(true);
 const systemHideDockIcon = ref(false);
@@ -456,6 +569,20 @@ const form = reactive<FormState>({
   tableId: ''
 });
 
+const fieldMapping = reactive({
+  tagFieldName: '',
+  priorityFieldName: '优先级',
+  priorityUrgentValue: ['今日必做'],
+  priorityImportantValue: ['本周完成'],
+  priorityNormalValue: ['自由安排']
+});
+
+const priorityMappingRows: Array<{ key: 'urgent' | 'important' | 'normal'; label: string; model: PriorityMappingModel }> = [
+  { key: 'urgent', label: '紧急', model: 'priorityUrgentValue' },
+  { key: 'important', label: '重要', model: 'priorityImportantValue' },
+  { key: 'normal', label: '普通', model: 'priorityNormalValue' }
+];
+
 const stepState = reactive({
   templateReady: false,
   linkParsed: false,
@@ -470,6 +597,29 @@ const themePreferenceValue = ref<ThemePreference>(themePreference.value);
 const feishuConfigured = computed(() => Boolean(form.appToken && form.tableId && form.appId && (form.appSecret || hasSavedSecret.value)));
 const bitableReady = computed(() => Boolean(form.appToken && form.tableId));
 const credentialReady = computed(() => Boolean(form.appId && (form.appSecret || hasSavedSecret.value)));
+const multiSelectFields = computed(() => feishuFields.value.filter((field) => field.field_type === 4));
+const singleSelectFields = computed(() => feishuFields.value.filter((field) => field.field_type === 3));
+const selectedTagOptions = computed(
+  () => multiSelectFields.value.find((field) => field.field_name === fieldMapping.tagFieldName)?.options || []
+);
+const selectedPriorityOptions = computed(
+  () => singleSelectFields.value.find((field) => field.field_name === fieldMapping.priorityFieldName)?.options || []
+);
+const tagFieldSelectOptions = computed(() => [
+  { value: '', label: 'Topdo 默认“标签”文本字段' },
+  ...multiSelectFields.value.map((field) => ({
+    value: field.field_name,
+    label: `${field.field_name}（${field.options.length} 个选项）`
+  }))
+]);
+const priorityFieldSelectOptions = computed(() => singleSelectFields.value.map((field) => ({
+  value: field.field_name,
+  label: field.field_name
+})));
+const priorityValueSelectOptions = computed(() => selectedPriorityOptions.value.map((option) => ({
+  value: option,
+  label: option
+})));
 const habitModuleEnabledModel = computed({
   get: () => appStore.habitModuleEnabled,
   set: (enabled: boolean) => appStore.setHabitModuleEnabled(enabled)
@@ -740,6 +890,123 @@ function openCredentialStep() {
   if (nextOpen) bitableExpanded.value = false;
 }
 
+function parsePriorityMappingValue(raw: string, fallback: string): string[] {
+  const value = String(raw || '').trim();
+  if (!value) return [fallback];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      const values = parsed.map((item) => String(item || '').trim()).filter(Boolean);
+      return values.length ? Array.from(new Set(values)) : [fallback];
+    }
+  } catch {
+    // Older settings store one plain enum value instead of a JSON array.
+  }
+  return [value];
+}
+
+function pickExistingOptions(options: string[], current: string[], aliases: string[]): string[] {
+  const existing = current.filter((value) => options.includes(value));
+  if (existing.length) return existing;
+  const fallback = aliases.find((alias) => options.includes(alias));
+  return fallback ? [fallback] : [];
+}
+
+function applyPriorityOptionsForSelectedField() {
+  const options = selectedPriorityOptions.value;
+  fieldMapping.priorityUrgentValue = pickExistingOptions(options, fieldMapping.priorityUrgentValue, ['紧急', '今日必做']);
+  fieldMapping.priorityImportantValue = pickExistingOptions(options, fieldMapping.priorityImportantValue, ['重要', '本周完成']);
+  fieldMapping.priorityNormalValue = pickExistingOptions(options, fieldMapping.priorityNormalValue, ['普通', '自由安排']);
+}
+
+function onPriorityFieldSelected(value: string) {
+  fieldMapping.priorityFieldName = value;
+  applyPriorityOptionsForSelectedField();
+}
+
+async function loadFeishuFields(showMessage = false) {
+  if (!feishuConfigured.value) {
+    setStatus('error', '请先完成多维表格和应用凭证配置');
+    return;
+  }
+  fieldLoading.value = true;
+  try {
+    await invoke('save_config', buildSaveConfigParams());
+    const fields = await invoke<FeishuFieldPayload[]>('get_feishu_fields');
+    feishuFields.value = fields;
+
+    if (!singleSelectFields.value.some((field) => field.field_name === fieldMapping.priorityFieldName)) {
+      fieldMapping.priorityFieldName = singleSelectFields.value.find((field) => field.field_name === '优先级')?.field_name
+        || singleSelectFields.value[0]?.field_name
+        || '';
+      applyPriorityOptionsForSelectedField();
+    }
+    if (fieldMapping.tagFieldName && !multiSelectFields.value.some((field) => field.field_name === fieldMapping.tagFieldName)) {
+      fieldMapping.tagFieldName = '';
+    }
+    if (fieldMapping.tagFieldName) taskStore.rememberTags(selectedTagOptions.value);
+    if (showMessage) setStatus('success', `已读取 ${fields.length} 个飞书字段`);
+  } catch (error) {
+    setStatus('error', `读取飞书字段失败：${String(error)}`);
+  } finally {
+    fieldLoading.value = false;
+  }
+}
+
+function openFieldMapping() {
+  const nextOpen = !fieldMappingExpanded.value;
+  fieldMappingExpanded.value = nextOpen;
+  if (!nextOpen) return;
+  bitableExpanded.value = false;
+  credentialExpanded.value = false;
+  if (!feishuFields.value.length) void loadFeishuFields(false);
+}
+
+async function saveFieldMapping() {
+  if (!fieldMapping.priorityFieldName) {
+    setStatus('error', '请选择飞书优先级单选字段');
+    return;
+  }
+  if (!fieldMapping.priorityUrgentValue.length || !fieldMapping.priorityImportantValue.length || !fieldMapping.priorityNormalValue.length) {
+    setStatus('error', '请为紧急、重要、普通分别选择至少一个飞书枚举值');
+    return;
+  }
+  const allPriorityValues = [
+    ...fieldMapping.priorityUrgentValue,
+    ...fieldMapping.priorityImportantValue,
+    ...fieldMapping.priorityNormalValue
+  ];
+  if (new Set(allPriorityValues).size !== allPriorityValues.length) {
+    setStatus('error', '同一个飞书枚举值不能同时绑定多个 Topdo 优先级');
+    return;
+  }
+
+  fieldMappingSaving.value = true;
+  try {
+    await invoke('save_feishu_field_mapping', {
+      tagFieldName: fieldMapping.tagFieldName,
+      tag_field_name: fieldMapping.tagFieldName,
+      priorityFieldName: fieldMapping.priorityFieldName,
+      priority_field_name: fieldMapping.priorityFieldName,
+      priorityUrgentValue: JSON.stringify(fieldMapping.priorityUrgentValue),
+      priority_urgent_value: JSON.stringify(fieldMapping.priorityUrgentValue),
+      priorityImportantValue: JSON.stringify(fieldMapping.priorityImportantValue),
+      priority_important_value: JSON.stringify(fieldMapping.priorityImportantValue),
+      priorityNormalValue: JSON.stringify(fieldMapping.priorityNormalValue),
+      priority_normal_value: JSON.stringify(fieldMapping.priorityNormalValue)
+    });
+    if (fieldMapping.tagFieldName) taskStore.rememberTags(selectedTagOptions.value);
+    fieldMappingSaved.value = true;
+    fieldMappingExpanded.value = false;
+    setStatus('success', '字段同步映射已保存');
+    if (taskStore.mode === 'feishu') await taskStore.fetchTasks();
+  } catch (error) {
+    setStatus('error', `字段映射保存失败：${String(error)}`);
+  } finally {
+    fieldMappingSaving.value = false;
+  }
+}
+
 async function loadConfig() {
   try {
     const config = await invoke<LoadConfigPayload>('load_config');
@@ -752,6 +1019,21 @@ async function loadConfig() {
     form.bitableUrl = config.app_token && config.table_id ? `https://www.feishu.cn/base/${config.app_token}?table=${config.table_id}` : '';
     form.appSecret = '';
     hasSavedSecret.value = Boolean(config.has_secret);
+    fieldMapping.tagFieldName = config.tag_field_name || '';
+    fieldMapping.priorityFieldName = config.priority_field_name || '优先级';
+    fieldMapping.priorityUrgentValue = parsePriorityMappingValue(config.priority_urgent_value, '今日必做');
+    fieldMapping.priorityImportantValue = parsePriorityMappingValue(config.priority_important_value, '本周完成');
+    fieldMapping.priorityNormalValue = parsePriorityMappingValue(config.priority_normal_value, '自由安排');
+    fieldMappingSaved.value = Boolean(
+      config.tag_field_name
+      || config.priority_field_name !== '优先级'
+      || fieldMapping.priorityUrgentValue.length !== 1
+      || fieldMapping.priorityUrgentValue[0] !== '今日必做'
+      || fieldMapping.priorityImportantValue.length !== 1
+      || fieldMapping.priorityImportantValue[0] !== '本周完成'
+      || fieldMapping.priorityNormalValue.length !== 1
+      || fieldMapping.priorityNormalValue[0] !== '自由安排'
+    );
     stepState.linkParsed = Boolean(config.app_token && config.table_id);
     stepState.credentialReady = Boolean(config.app_id && config.has_secret);
     stepState.connectionReady = false;
@@ -1002,6 +1284,10 @@ onMounted(() => {
 function handleEsc(): boolean {
   if (showLogs.value) {
     showLogs.value = false;
+    return true;
+  }
+  if (fieldMappingExpanded.value) {
+    fieldMappingExpanded.value = false;
     return true;
   }
   if (credentialExpanded.value) {
@@ -1340,6 +1626,173 @@ watch(
   gap: 8px;
   justify-content: flex-end;
   margin-top: 10px;
+}
+
+.field-sync-group {
+  overflow: hidden;
+}
+
+.field-sync-summary {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.mapping-state {
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--accent-green-soft);
+  color: var(--accent-green);
+  font-size: 10px;
+  line-height: 20px;
+  font-weight: 600;
+  padding: 0 8px;
+}
+
+.field-mapping-panel {
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  padding: 12px;
+}
+
+.mapping-intro,
+.mapping-heading,
+.mapping-actions,
+.mapping-empty,
+.priority-mapping-row {
+  display: flex;
+  align-items: center;
+}
+
+.mapping-intro {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.mapping-intro strong,
+.mapping-heading strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+}
+
+.mapping-intro p,
+.mapping-heading p {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.mapping-empty {
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+  padding: 12px;
+}
+
+.mapping-section {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-solid);
+  padding: 12px;
+}
+
+.mapping-section + .mapping-section {
+  margin-top: 10px;
+}
+
+.mapping-heading {
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.mapping-number {
+  width: 21px;
+  height: 21px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.mapping-control {
+  margin: 0;
+}
+
+.mapping-preview {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.priority-mapping-grid {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.priority-mapping-row {
+  display: grid;
+  grid-template-columns: 64px 14px minmax(0, 1fr);
+  gap: 7px;
+  color: var(--text-tertiary);
+}
+
+.priority-mapping-row .topdo-multi-select {
+  min-width: 0;
+}
+
+.mapping-hint {
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.local-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.local-priority i {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--text-tertiary);
+}
+
+.local-priority.urgent i {
+  background: var(--priority-high);
+}
+
+.local-priority.important i {
+  background: var(--primary);
+}
+
+.mapping-actions {
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .form-hint {

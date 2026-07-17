@@ -66,6 +66,7 @@ const COMPLETED_HISTORY_WINDOW_DAYS = 30;
 const COMPLETED_HISTORY_WINDOW_MS = COMPLETED_HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const FEISHU_RECENT_WRITE_PROTECTION_MS = 30_000;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let syncRequestedWhileRunning = false;
 const localStatusSaveQueue = new Map<string, Promise<void>>();
 let recurringInitPromise: Promise<void> | null = null;
 const recentFeishuWritePatches = new Map<string, { patch: Partial<Task>; expiresAt: number }>();
@@ -148,15 +149,6 @@ function fromFeishuPriority(priority: string): string {
     '⚪自由安排': '普通'
   };
   return map[priority] || priority || '普通';
-}
-
-function toFeishuPriority(priority: string): string {
-  const map: Record<string, string> = {
-    '紧急': '今日必做',
-    '重要': '本周完成',
-    '普通': '自由安排'
-  };
-  return map[priority] || priority;
 }
 
 function normalizePriority(priority: string): string {
@@ -319,6 +311,39 @@ function hydrateRecurringInstanceRules(tasks: Task[]): Task[] {
 
 function sameRecurrenceRule(a: Task['recurrence_rule'] | null | undefined, b: Task['recurrence_rule'] | null | undefined): boolean {
   return JSON.stringify(a || null) === JSON.stringify(b || null);
+}
+
+function taskIdentityKeys(task: Task | undefined): string[] {
+  if (!task) return [];
+  return [task.id, task.record_id, task.feishu_record_id]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+}
+
+function recurringSeriesContext(tasks: Task[], target: Task) {
+  const parentId = (target.recurrence_parent_id || '').trim();
+  let template = parentId ? findTaskByRecordId(tasks, parentId) : target;
+
+  // 兼容飞书同步将 temp id 替换为 record_id 后，旧实例仍引用 temp parent id。
+  if (!template && parentId && target.recurrence_rule) {
+    template = tasks.find((task) => (
+      !task.recurrence_parent_id
+      && task.name === target.name
+      && sameRecurrenceRule(task.recurrence_rule, target.recurrence_rule)
+    ));
+  }
+
+  const seriesIds = new Set<string>([parentId, ...taskIdentityKeys(template || target)].filter(Boolean));
+  const members = tasks.filter((task) => {
+    const memberParentId = (task.recurrence_parent_id || '').trim();
+    if (memberParentId && seriesIds.has(memberParentId)) return true;
+    return taskIdentityKeys(task).some((id) => seriesIds.has(id));
+  });
+
+  return {
+    seriesIds: Array.from(seriesIds),
+    members
+  };
 }
 
 function isRecordIdNotFound(message: string): boolean {
@@ -631,6 +656,7 @@ export const useTaskStore = defineStore('task', {
 
     setTasks(tasks: Task[]) {
       this.tasks = hydrateRecurringInstanceRules(tasks.map(normalizeTask));
+      this.rememberTags(this.tasks.flatMap((task) => normalizeTags(task.tags)));
     },
 
     setSyncMeta(payload?: SyncTasksResult['sync_meta']) {
@@ -1046,7 +1072,10 @@ export const useTaskStore = defineStore('task', {
 
     async triggerSync() {
       if (this.mode !== 'feishu') return;
-      if (this.isSyncing) return;
+      if (this.isSyncing) {
+        syncRequestedWhileRunning = true;
+        return;
+      }
       this.isSyncing = true;
       log('SYNC', '开始同步');
       try {
@@ -1076,7 +1105,22 @@ export const useTaskStore = defineStore('task', {
         throw error;
       } finally {
         this.isSyncing = false;
+        if (syncRequestedWhileRunning && this.mode === 'feishu') {
+          syncRequestedWhileRunning = false;
+          window.setTimeout(() => {
+            void this.triggerSync().catch((error) => {
+              log('SYNC', '排队同步失败', { error: String(error) });
+            });
+          }, 0);
+        }
       }
+    },
+
+    async retryTaskSync(recordId: string) {
+      if (this.mode !== 'feishu') return;
+      await invoke('retry_task_sync', { recordId });
+      this.setTaskPatch(recordId, { sync_status: 'pending', last_error: '' });
+      await this.triggerSync();
     },
 
     scheduleSyncAfterWrite() {
@@ -1444,7 +1488,7 @@ export const useTaskStore = defineStore('task', {
           record_id: remoteRecordId,
           fieldName: '优先级',
           field_name: '优先级',
-          value: toFeishuPriority(normalizedPriority)
+          value: normalizedPriority
         });
 
         log('API', '飞书返回', { status: result.success ? 200 : 500, data: result });
@@ -1516,7 +1560,6 @@ export const useTaskStore = defineStore('task', {
       if (!trimmed) throw new Error('任务名称不能为空');
 
       const normalizedPriority = normalizePriority(taskInput.priority || '普通');
-      const feishuPriority = toFeishuPriority(normalizedPriority);
       const normalizedType =
         this.mode === 'local'
           ? (taskInput.task_type || '日常事务').trim() || '日常事务'
@@ -1657,19 +1700,18 @@ export const useTaskStore = defineStore('task', {
         }
 
         const syncField = async (fieldName: string, value: string) => {
-          const fieldValue = fieldName === '优先级' ? toFeishuPriority(value) : value;
           const fieldResult = await invoke<UpdateTaskResult>('update_task', {
             recordId: result.record_id,
             record_id: result.record_id,
             fieldName,
             field_name: fieldName,
-            value: fieldValue
+            value
           });
           if (!fieldResult.success) throw new Error(fieldResult.message || `${fieldName} 同步失败`);
         };
 
         try {
-          await syncField('优先级', feishuPriority);
+          await syncField('优先级', normalizedPriority);
           if (normalizedStatus && normalizedStatus !== '待处理') await syncField('状态', normalizedStatus);
         } catch (error) {
           const message = `新任务字段同步失败：${String(error)}`;
@@ -1742,17 +1784,18 @@ export const useTaskStore = defineStore('task', {
       if (!target) return;
       const snapshot = [...this.tasks];
       const shouldSkipCurrentOccurrence = Boolean(target.recurrence_parent_id && !options.stopFutureRepeats);
-
-      const parentId = (target.recurrence_parent_id || '').trim();
-      const parent = parentId ? findTaskByRecordId(this.tasks, parentId) : undefined;
-      const shouldStopParent = Boolean(
-        options.stopFutureRepeats && parent && parent.record_id !== recordId && parent.id !== recordId
-      );
-      if (options.stopFutureRepeats && parentId && !parent) {
-        throw new Error('找不到原始重复任务，无法停止后续重复');
+      const series = options.stopFutureRepeats ? recurringSeriesContext(this.tasks, target) : null;
+      let seriesStopped = false;
+      if (options.stopFutureRepeats && !series?.seriesIds.length) {
+        throw new Error('找不到重复任务系列，无法停止后续重复');
       }
-      if (shouldStopParent && parent) {
-        this.setTaskPatch(parent.record_id || parent.id || parentId, { recurrence_rule: null });
+      if (series) {
+        const memberIds = new Set(series.members.flatMap(taskIdentityKeys));
+        this.tasks = this.tasks.map((task) => (
+          taskIdentityKeys(task).some((id) => memberIds.has(id))
+            ? { ...task, recurrence_rule: null }
+            : task
+        ));
       }
       if (shouldSkipCurrentOccurrence) {
         rememberSkippedRecurrence(target);
@@ -1760,11 +1803,14 @@ export const useTaskStore = defineStore('task', {
       this.tasks = this.tasks.filter((task) => task.record_id !== recordId);
 
       try {
-        if (shouldStopParent && parent) {
-          await invoke<Task>('update_local_task', {
-            id: parent.id || parent.record_id,
-            fields: { recurrence_rule: '' }
+        if (series) {
+          const stoppedCount = await invoke<number>('stop_recurring_series', {
+            seriesIds: series.seriesIds
           });
+          if (stoppedCount < 1) {
+            throw new Error('本地未找到对应的重复任务系列');
+          }
+          seriesStopped = true;
         }
 
         if (this.mode === 'local') {
@@ -1787,17 +1833,14 @@ export const useTaskStore = defineStore('task', {
         if (shouldSkipCurrentOccurrence) {
           forgetSkippedRecurrence(target);
         }
-        if (shouldStopParent && parent) {
-          try {
-            await invoke<Task>('update_local_task', {
-              id: parent.id || parent.record_id,
-              fields: {
-                recurrence_rule: parent.recurrence_rule ? JSON.stringify(parent.recurrence_rule) : ''
-              }
-            });
-          } catch (rollbackError) {
-            log('API', '停止重复回滚失败', { error: String(rollbackError) });
-          }
+        if (series && seriesStopped) {
+          const stoppedIds = new Set(series.members.flatMap(taskIdentityKeys));
+          this.tasks = snapshot.map((task) => (
+            taskIdentityKeys(task).some((id) => stoppedIds.has(id))
+              ? { ...task, recurrence_rule: null }
+              : task
+          ));
+          throw new Error(`后续重复已停止，但本次任务删除失败：${String(error)}`);
         }
         this.tasks = snapshot;
         throw error;

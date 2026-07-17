@@ -19,7 +19,8 @@
     <button type="button" class="stats-summary" @click="statsOpen = !statsOpen">
       今日完成 {{ taskStore.todayCompletedCount }} 项 · 本周 {{ taskStore.weekCompletedCount }} 项 · 🔥连续 {{ taskStore.completionStreak }} 天
     </button>
-    <StatsPanel v-if="statsOpen" />
+    <StatsPanel v-if="statsOpen" @open-receipt="openReceipt" />
+    <DailyReceipt v-model="receiptOpen" />
   </div>
 </template>
 
@@ -28,6 +29,7 @@ import { computed, ref } from 'vue';
 import { useTaskStore } from '../stores/taskStore';
 import type { TaskFilter } from '../stores/taskStore';
 import StatsPanel from './StatsPanel.vue';
+import DailyReceipt from './DailyReceipt.vue';
 
 const taskStore = useTaskStore();
 
@@ -37,6 +39,12 @@ const pendingCount = computed(() => taskStore.pendingTaskCount);
 const inProgressCount = computed(() => taskStore.inProgressTaskCount);
 const doneCount = computed(() => taskStore.completedTaskCount);
 const statsOpen = ref(false);
+const receiptOpen = ref(false);
+
+function openReceipt() {
+  statsOpen.value = false;
+  receiptOpen.value = true;
+}
 
 function setFilter(filter: TaskFilter) {
   taskStore.setFilter(filter);

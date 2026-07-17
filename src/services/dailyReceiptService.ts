@@ -126,22 +126,15 @@ export function buildDailyReceiptData(
 
 export function buildDailyReceiptText(data: DailyReceiptData): string {
   const lines = [
-    `Topdo 今日小票 · ${data.dateLabel}`,
+    `Topdo · 日有所成 · ${data.dateLabel}`,
     '',
     `今天完成 ${data.totalCount} 项`,
     ...data.items.map((item) => `✓ ${item.name}${item.time ? `  ${item.time}` : ''}`)
   ];
   if (data.remainingCount > 0) lines.push(`… 另有 ${data.remainingCount} 项已完成`);
   lines.push('', `重点任务 ${data.focusCount} · 习惯打卡 ${data.habitChecked}/${data.habitTotal} · 连续完成 ${data.streak} 天`);
-  if (data.tags.length) lines.push(`今日标签：${data.tags.join(' · ')}`);
   lines.push('', data.encouragement);
   return lines.join('\n');
-}
-
-function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
-  context.beginPath();
-  context.roundRect(x, y, width, height, radius);
-  context.fill();
 }
 
 function drawReceiptPaper(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
@@ -185,7 +178,7 @@ function drawDashedLine(context: CanvasRenderingContext2D, x1: number, y: number
 
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('生成小票图片失败'))), 'image/png');
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('生成“日有所成”图片失败'))), 'image/png');
   });
 }
 
@@ -214,7 +207,7 @@ export async function renderDailyReceiptPng(data: DailyReceiptData): Promise<Blo
   context.restore();
 
   drawText(context, 'TOPDO', 375, 82, { font: '700 22px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#007aff', align: 'center' });
-  drawText(context, '今日小票', 375, 150, { font: '750 48px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', align: 'center' });
+  drawText(context, '日有所成', 375, 150, { font: '750 48px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', align: 'center' });
   drawDashedLine(context, 95, 210, 655);
   drawText(context, data.dateLabel, 375, 245, { font: '400 20px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#86868b', align: 'center' });
   drawText(context, '今天完成', 375, 310, { font: '400 22px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#86868b', align: 'center' });
@@ -260,19 +253,6 @@ export async function renderDailyReceiptPng(data: DailyReceiptData): Promise<Blo
     drawText(context, label, x, summaryY, { font: '400 18px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#86868b', align: 'center' });
     drawText(context, value, x, summaryY + 48, { font: '650 40px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#007aff', align: 'center' });
   });
-
-  if (data.tags.length) {
-    context.font = '500 19px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif';
-    const widths = data.tags.map((tag) => Math.max(110, context.measureText(tag).width + 48));
-    const totalWidth = widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 16;
-    let x = (750 - totalWidth) / 2;
-    data.tags.forEach((tag, index) => {
-      context.fillStyle = '#eff6ff';
-      roundedRect(context, x, 990, widths[index], 52, 26);
-      drawText(context, tag, x + widths[index] / 2, 1016, { font: '500 19px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#007aff', align: 'center' });
-      x += widths[index] + 16;
-    });
-  }
 
   drawDashedLine(context, 95, 1075, 655);
   drawText(context, data.encouragement, 375, 1115, { font: '500 21px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif', color: '#55555a', align: 'center' });

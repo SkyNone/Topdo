@@ -14,6 +14,7 @@ use std::{
   path::{Path, PathBuf},
   str::FromStr,
   sync::Mutex,
+  time::Duration,
 };
 use tauri::{
   Emitter,
@@ -41,6 +42,8 @@ const TOKEN_SALT: &str = "topdo-salt-2026";
 const DEFAULT_TOGGLE_SHORTCUT: &str = "Cmd+Shift+T";
 const DEFAULT_TOGGLE_MODE_SHORTCUT: &str = "Alt+T";
 const DEFAULT_QUICK_CAPTURE_SHORTCUT: &str = "Alt+Space";
+const FEISHU_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const FEISHU_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[cfg(target_os = "macos")]
 const KCG_NORMAL_WINDOW_LEVEL_KEY: i32 = 4;
@@ -1508,15 +1511,31 @@ fn is_token_invalid_code(code: i32) -> bool {
   matches!(code, 99991663 | 99991664 | 99991677)
 }
 
+fn build_feishu_http_client() -> Result<reqwest::Client, String> {
+  reqwest::Client::builder()
+    .use_rustls_tls()
+    .connect_timeout(FEISHU_CONNECT_TIMEOUT)
+    .timeout(FEISHU_REQUEST_TIMEOUT)
+    .build()
+    .map_err(|err| format!("http client init failed: {err}"))
+}
+
+fn describe_feishu_request_error(action: &str, error: reqwest::Error) -> String {
+  if error.is_timeout() {
+    format!("{action}超时，请检查网络或稍后重试")
+  } else if error.is_connect() {
+    format!("{action}失败，无法连接飞书，请检查网络后重试")
+  } else {
+    format!("{action}失败：{error}")
+  }
+}
+
 async fn refresh_tenant_access_token_by_credentials(
   app_id: &str,
   app_secret: &str,
 ) -> Result<(String, i64), String> {
   let endpoint = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
-  let client = reqwest::Client::builder()
-    .use_rustls_tls()
-    .build()
-    .map_err(|err| format!("http client init failed: {err}"))?;
+  let client = build_feishu_http_client()?;
 
   let response = client
     .post(endpoint)
@@ -1527,7 +1546,7 @@ async fn refresh_tenant_access_token_by_credentials(
     }))
     .send()
     .await
-    .map_err(|err| format!("request failed: {err}"))?;
+    .map_err(|err| describe_feishu_request_error("获取飞书访问凭证", err))?;
 
   let status = response.status();
   let body = response
@@ -1937,10 +1956,7 @@ async fn feishu_list_fields(app: &AppHandle) -> Result<Vec<FeishuFieldPayload>, 
     config.feishu.app_token.trim(),
     config.feishu.table_id.trim()
   );
-  let client = reqwest::Client::builder()
-    .use_rustls_tls()
-    .build()
-    .map_err(|err| format!("http client init failed: {err}"))?;
+  let client = build_feishu_http_client()?;
 
   'token_attempts: for attempt in 0..2 {
     let token = get_tenant_access_token(app, attempt == 1).await?;
@@ -1958,7 +1974,7 @@ async fn feishu_list_fields(app: &AppHandle) -> Result<Vec<FeishuFieldPayload>, 
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|err| format!("request failed: {err}"))?;
+        .map_err(|err| describe_feishu_request_error("读取飞书字段", err))?;
       let status = response.status();
       let body = response
         .text()
@@ -3965,7 +3981,7 @@ async fn save_feishu_field_mapping(
   for value in priority_values.iter().flatten() {
     if !priority_field.options.iter().any(|option| option == value) {
       return Err(format!(
-        "枚举值“{}”不在字段“{}”中，请先在飞书中创建该选项",
+        "枚举值“{}”已不在字段“{}”中，请返回字段映射刷新后重新选择",
         value, priority_field_name
       ));
     }

@@ -7,6 +7,22 @@
       <button type="button" class="ghost-btn settings-back-btn" @click="$emit('back')">返回任务</button>
     </header>
 
+    <Transition name="settings-toast">
+      <div v-if="statusMessage" class="settings-toast" :class="statusType" role="status" aria-live="polite">
+        <Icon :name="statusType === 'success' ? 'check-circle' : 'info'" :size="17" />
+        <div class="settings-toast__content">
+          <p>{{ statusMessage }}</p>
+          <div v-if="statusType === 'error' && statusDetail" class="settings-toast__actions">
+            <button type="button" @click="onCopyErrorDetail">复制错误详情</button>
+            <span v-if="errorDetailCopied">已复制</span>
+          </div>
+        </div>
+        <button type="button" class="settings-toast__close" aria-label="关闭提示" @click="clearStatus">
+          <Icon name="x" :size="15" />
+        </button>
+      </div>
+    </Transition>
+
     <section class="settings-group padded-group">
       <SegmentedControl
         v-model="selectedMode"
@@ -232,8 +248,14 @@
 
               <div class="mapping-actions">
                 <button type="button" class="btn ghost" @click="fieldMappingExpanded = false">取消</button>
-                <button type="button" class="btn primary" :disabled="busy || fieldMappingSaving" @click="saveFieldMapping">
-                  {{ fieldMappingSaving ? '保存中...' : '保存字段映射' }}
+                <button
+                  type="button"
+                  class="btn primary"
+                  :disabled="fieldLoading || fieldMappingSaving"
+                  :aria-busy="fieldMappingSaving"
+                  @click="saveFieldMapping"
+                >
+                  {{ fieldMappingSaving ? '正在校验并保存...' : '保存字段映射' }}
                 </button>
               </div>
             </template>
@@ -396,17 +418,6 @@
       </button>
     </section>
 
-    <p v-if="statusMessage" class="status-message" :class="statusType">
-      {{ statusMessage }}
-    </p>
-    <div v-if="statusType === 'error' && statusDetail" class="error-detail">
-      <div class="error-actions">
-        <button type="button" class="btn secondary compact" @click="onCopyErrorDetail">复制错误详情</button>
-        <span v-if="errorDetailCopied">已复制</span>
-      </div>
-      <pre>{{ statusDetail }}</pre>
-    </div>
-
     <div class="footer-actions">
       <button type="button" class="btn secondary" :disabled="busy || selectedMode !== 'feishu'" @click="onTestConnection">测试连接</button>
       <button type="button" class="btn primary" :disabled="busy" @click="onSave">保存设置</button>
@@ -419,7 +430,7 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import Icon from './Icon.vue';
 import KbdShortcut from './KbdShortcut.vue';
@@ -436,7 +447,7 @@ import { clearLogs, formatLogLine, logs } from '../utils/logger';
 import { setThemePreference, useThemeState, type ThemePreference } from '../utils/theme';
 
 type AppMode = 'local' | 'feishu';
-type StatusType = 'success' | 'error';
+type StatusType = 'success' | 'error' | 'info';
 
 interface FormState {
   bitableUrl: string;
@@ -560,6 +571,7 @@ const systemHideDockIcon = ref(false);
 const quickCaptureShortcutDraft = ref('Alt+Space');
 const dataActionMessage = ref('');
 const dataActionType = ref<StatusType>('success');
+let statusDismissTimer: ReturnType<typeof setTimeout> | undefined;
 
 const form = reactive<FormState>({
   bitableUrl: '',
@@ -634,6 +646,8 @@ const autoUpdateEnabledModel = computed({
 });
 
 function setStatus(type: StatusType, message: string) {
+  if (statusDismissTimer) clearTimeout(statusDismissTimer);
+  errorDetailCopied.value = false;
   statusType.value = type;
   if (type === 'error') {
     const firstLine = message.split('\n').find((line) => line.trim().length > 0) || message;
@@ -642,7 +656,19 @@ function setStatus(type: StatusType, message: string) {
   } else {
     statusMessage.value = message;
     statusDetail.value = '';
+    statusDismissTimer = setTimeout(() => {
+      statusMessage.value = '';
+      statusDismissTimer = undefined;
+    }, type === 'info' ? 5000 : 3600);
   }
+}
+
+function clearStatus() {
+  if (statusDismissTimer) clearTimeout(statusDismissTimer);
+  statusDismissTimer = undefined;
+  statusMessage.value = '';
+  statusDetail.value = '';
+  errorDetailCopied.value = false;
 }
 
 function normalizeVersion(value: string): number[] {
@@ -930,6 +956,7 @@ async function loadFeishuFields(showMessage = false) {
     return;
   }
   fieldLoading.value = true;
+  setStatus('info', '正在读取飞书字段，请稍候...');
   try {
     await invoke('save_config', buildSaveConfigParams());
     const fields = await invoke<FeishuFieldPayload[]>('get_feishu_fields');
@@ -939,13 +966,24 @@ async function loadFeishuFields(showMessage = false) {
       fieldMapping.priorityFieldName = singleSelectFields.value.find((field) => field.field_name === '优先级')?.field_name
         || singleSelectFields.value[0]?.field_name
         || '';
-      applyPriorityOptionsForSelectedField();
     }
+    // Config may still contain defaults from the Topdo template that do not exist
+    // in the user's selected field. Remove those hidden stale values after every refresh.
+    applyPriorityOptionsForSelectedField();
     if (fieldMapping.tagFieldName && !multiSelectFields.value.some((field) => field.field_name === fieldMapping.tagFieldName)) {
       fieldMapping.tagFieldName = '';
     }
     if (fieldMapping.tagFieldName) taskStore.rememberTags(selectedTagOptions.value);
-    if (showMessage) setStatus('success', `已读取 ${fields.length} 个飞书字段`);
+    const mappingComplete = Boolean(
+      fieldMapping.priorityFieldName
+      && fieldMapping.priorityUrgentValue.length
+      && fieldMapping.priorityImportantValue.length
+      && fieldMapping.priorityNormalValue.length
+    );
+    const message = mappingComplete
+      ? `已读取 ${fields.length} 个飞书字段`
+      : `已读取 ${fields.length} 个飞书字段，请重新选择未匹配的优先级枚举`;
+    if (showMessage || !mappingComplete) setStatus(mappingComplete ? 'success' : 'info', message);
   } catch (error) {
     setStatus('error', `读取飞书字段失败：${String(error)}`);
   } finally {
@@ -976,12 +1014,22 @@ async function saveFieldMapping() {
     ...fieldMapping.priorityImportantValue,
     ...fieldMapping.priorityNormalValue
   ];
+  const availablePriorityValues = new Set(selectedPriorityOptions.value);
+  const stalePriorityValues = allPriorityValues.filter((value) => !availablePriorityValues.has(value));
+  if (stalePriorityValues.length) {
+    setStatus(
+      'error',
+      `以下枚举已不在飞书字段“${fieldMapping.priorityFieldName}”中：${Array.from(new Set(stalePriorityValues)).join('、')}。请刷新字段后重新选择。`
+    );
+    return;
+  }
   if (new Set(allPriorityValues).size !== allPriorityValues.length) {
     setStatus('error', '同一个飞书枚举值不能同时绑定多个 Topdo 优先级');
     return;
   }
 
   fieldMappingSaving.value = true;
+  setStatus('info', '正在校验飞书字段并保存映射，请稍候...');
   try {
     await invoke('save_feishu_field_mapping', {
       tagFieldName: fieldMapping.tagFieldName,
@@ -997,9 +1045,12 @@ async function saveFieldMapping() {
     });
     if (fieldMapping.tagFieldName) taskStore.rememberTags(selectedTagOptions.value);
     fieldMappingSaved.value = true;
-    fieldMappingExpanded.value = false;
     setStatus('success', '字段同步映射已保存');
-    if (taskStore.mode === 'feishu') await taskStore.fetchTasks();
+    if (taskStore.mode === 'feishu') {
+      void taskStore.fetchTasks().catch((error) => {
+        setStatus('error', `字段映射已保存，但刷新任务失败：${String(error)}`);
+      });
+    }
   } catch (error) {
     setStatus('error', `字段映射保存失败：${String(error)}`);
   } finally {
@@ -1281,6 +1332,10 @@ onMounted(() => {
   void loadAutostartState();
 });
 
+onBeforeUnmount(() => {
+  if (statusDismissTimer) clearTimeout(statusDismissTimer);
+});
+
 function handleEsc(): boolean {
   if (showLogs.value) {
     showLogs.value = false;
@@ -1340,6 +1395,99 @@ watch(
   font-size: 20px;
   line-height: 28px;
   font-weight: 700;
+}
+
+.settings-toast {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr) 24px;
+  align-items: start;
+  gap: 9px;
+  margin: -4px 0 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  font-size: 12px;
+  line-height: 17px;
+  padding: 10px 8px 10px 11px;
+}
+
+.settings-toast.success {
+  border-color: color-mix(in srgb, var(--accent-green) 25%, var(--border-light));
+  background: color-mix(in srgb, var(--accent-green) 9%, var(--bg-solid));
+  color: var(--accent-green);
+}
+
+.settings-toast.info {
+  border-color: color-mix(in srgb, var(--primary) 25%, var(--border-light));
+  background: color-mix(in srgb, var(--primary) 8%, var(--bg-solid));
+  color: var(--primary);
+}
+
+.settings-toast.error {
+  border-color: color-mix(in srgb, var(--priority-high) 28%, var(--border-light));
+  background: color-mix(in srgb, var(--priority-high) 9%, var(--bg-solid));
+  color: var(--priority-high);
+}
+
+.settings-toast__content {
+  min-width: 0;
+}
+
+.settings-toast__content p {
+  overflow-wrap: anywhere;
+}
+
+.settings-toast__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 10px;
+}
+
+.settings-toast__actions button,
+.settings-toast__close {
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-toast__actions button {
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.settings-toast__close {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: -4px;
+  border-radius: 6px;
+  opacity: 0.72;
+}
+
+.settings-toast__close:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  opacity: 1;
+}
+
+.settings-toast-enter-active,
+.settings-toast-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.settings-toast-enter-from,
+.settings-toast-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 .settings-back-btn {
@@ -2169,25 +2317,6 @@ watch(
   gap: 8px;
 }
 
-.status-message {
-  margin: 12px 0 0;
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 16px;
-}
-
-.status-message.success {
-  background: color-mix(in srgb, var(--accent-green) 10%, var(--bg-solid));
-  color: var(--accent-green);
-}
-
-.status-message.error {
-  background: color-mix(in srgb, var(--priority-high) 8%, var(--bg-solid));
-  color: var(--priority-high);
-}
-
-.error-detail,
 .logs-panel {
   margin-top: 10px;
   border: 1px solid var(--border);
@@ -2196,7 +2325,6 @@ watch(
   padding: 10px;
 }
 
-.error-actions,
 .logs-header {
   display: flex;
   align-items: center;
@@ -2207,7 +2335,6 @@ watch(
   font-size: 11px;
 }
 
-.error-detail pre,
 .logs-list {
   max-height: 160px;
   overflow-y: auto;

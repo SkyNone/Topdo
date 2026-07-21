@@ -254,6 +254,8 @@ import { initializeTheme, toggleThemeQuickly, useThemeState } from './utils/them
 type ViewType = 'welcome' | 'main' | 'settings';
 const NORMAL_MIN_WIDTH = 320;
 const NORMAL_MIN_HEIGHT = 300;
+const MINI_DRAG_THRESHOLD_PX = 3;
+const MINI_CLICK_MAX_DURATION_MS = 260;
 
 interface WindowStatePayload {
   mini_mode: boolean;
@@ -328,7 +330,8 @@ const searchInputRef = ref<HTMLInputElement | null>(null);
 let miniStartPoint: { x: number; y: number } | null = null;
 let miniPressStartedAt = 0;
 let miniMouseMoveHandler: ((event: MouseEvent) => void) | null = null;
-let miniMouseUpHandler: (() => void) | null = null;
+let miniMouseUpHandler: ((event: MouseEvent) => void) | null = null;
+let miniDragIntent = false;
 let miniSuppressClick = false;
 
 const toast = ref('');
@@ -783,6 +786,7 @@ function cancelMiniInteraction() {
   clearMiniDragListeners();
   miniStartPoint = null;
   miniPressStartedAt = 0;
+  miniDragIntent = false;
   miniPressed.value = false;
   miniDragging.value = false;
 }
@@ -798,6 +802,7 @@ function onMiniMouseDown(event: MouseEvent) {
   if (event.button !== 0) return;
   miniPressed.value = true;
   miniDragging.value = false;
+  miniDragIntent = false;
   miniStartPoint = { x: event.clientX, y: event.clientY };
   miniPressStartedAt = Date.now();
 
@@ -806,7 +811,8 @@ function onMiniMouseDown(event: MouseEvent) {
     if (!miniStartPoint || miniDragging.value) return;
     const dx = moveEvent.clientX - miniStartPoint.x;
     const dy = moveEvent.clientY - miniStartPoint.y;
-    if (Math.hypot(dx, dy) < 3) return;
+    if (Math.hypot(dx, dy) < MINI_DRAG_THRESHOLD_PX) return;
+    miniDragIntent = true;
     miniDragging.value = true;
     suppressMiniClick(500);
     clearMiniDragListeners();
@@ -819,6 +825,7 @@ function onMiniMouseDown(event: MouseEvent) {
         window.setTimeout(() => {
           miniStartPoint = null;
           miniPressStartedAt = 0;
+          miniDragIntent = false;
           miniPressed.value = false;
           miniDragging.value = false;
           void persistPetPosition();
@@ -826,12 +833,16 @@ function onMiniMouseDown(event: MouseEvent) {
       });
   };
 
-  miniMouseUpHandler = () => {
+  miniMouseUpHandler = (upEvent: MouseEvent) => {
     const pressDuration = Date.now() - miniPressStartedAt;
-    const shouldRestore = !miniDragging.value && pressDuration < 260;
+    const dx = miniStartPoint ? upEvent.clientX - miniStartPoint.x : 0;
+    const dy = miniStartPoint ? upEvent.clientY - miniStartPoint.y : 0;
+    const moved = Math.hypot(dx, dy) >= MINI_DRAG_THRESHOLD_PX;
+    const shouldRestore = !miniDragging.value && !miniDragIntent && !moved && pressDuration < MINI_CLICK_MAX_DURATION_MS;
     clearMiniDragListeners();
     miniStartPoint = null;
     miniPressStartedAt = 0;
+    miniDragIntent = false;
     if (shouldRestore) {
       suppressMiniClick();
       void restoreNormalMode();
